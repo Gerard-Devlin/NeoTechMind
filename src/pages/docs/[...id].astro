@@ -1,0 +1,186 @@
+---
+import { BackToTop, TOC } from 'astro-pure/components/pages'
+import { MediumZoom } from 'astro-pure/advanced'
+import config from 'virtual:config'
+import PageLayout from '@/layouts/BaseLayout.astro'
+import DocsTree from '@/components/dynamic/DocsTree.astro'
+import MarkdownContent from '@/components/dynamic/MarkdownContent.astro'
+import { getDocPageData } from '@/lib/server/content.mjs'
+import { renderMarkdown } from '@/lib/server/markdown.mjs'
+
+const slug = Astro.params.id || ''
+const page = await getDocPageData(slug)
+const doc = page?.doc || null
+
+if (!doc) {
+  Astro.response.status = 404
+}
+
+const rendered = doc ? await renderMarkdown(doc.content) : { html: '', headings: [], hasMermaid: false }
+const sectionTree = page?.sectionTree || []
+---
+
+<PageLayout
+  meta={{
+    title: doc?.title || '文档不存在',
+    description: doc?.summary || '没有找到对应的文档内容'
+  }}
+  containerClass='max-w-[88rem]'
+>
+  <main class='py-8'>
+    {
+      doc ? (
+        <>
+          <div class='bb-docs-shell'>
+            <aside
+              class='animate top-20 z-30 min-w-48 overflow-y-scroll max-lg:hidden md:sticky lg:shrink-0'
+              style='height:calc(100vh - 7rem);'
+            >
+              <DocsTree
+                tree={page?.sectionTree || []}
+                currentPath={Astro.url.pathname}
+                currentSlug={slug}
+                title={page?.currentSection?.label || '本课程目录'}
+              />
+            </aside>
+
+            <section class='min-w-0'>
+              <div id='content-header' class='animate'>
+                <nav class='flex flex-wrap items-center gap-2 text-sm text-muted-foreground'>
+                  <a class='hover:text-foreground' href='/'>Home</a>
+                  <span>›</span>
+                  <a class='hover:text-foreground' href='/docs'>Docs</a>
+                  <span>›</span>
+                  <span>{page?.currentSection?.label || doc.section_label}</span>
+                </nav>
+
+                <p class='mt-5 text-sm uppercase tracking-[0.2em] text-muted-foreground'>
+                  {page?.currentSection?.label || doc.section_label}
+                </p>
+                <h1 class='mt-3 text-3xl font-semibold sm:text-4xl'>{doc.title}</h1>
+              </div>
+
+              <article id='content' class='mt-8 min-w-0'>
+                <MarkdownContent html={rendered.html} hasMermaid={rendered.hasMermaid} />
+              </article>
+
+              <div class='mt-10 grid gap-3 md:grid-cols-2'>
+                {page?.previousDoc ? (
+                  <a
+                    class='rounded-2xl border p-4 transition-colors hover:bg-muted/20'
+                    href={`/docs/${page.previousDoc.slug}`}
+                  >
+                    <p class='text-sm text-muted-foreground'>上一篇</p>
+                    <p class='mt-2 font-medium'>{page.previousDoc.title}</p>
+                  </a>
+                ) : (
+                  <div class='rounded-2xl border border-dashed p-4 text-sm text-muted-foreground'>
+                    已经是本课程第一篇。
+                  </div>
+                )}
+
+                {page?.nextDoc ? (
+                  <a
+                    class='rounded-2xl border p-4 transition-colors hover:bg-muted/20'
+                    href={`/docs/${page.nextDoc.slug}`}
+                  >
+                    <p class='text-sm text-muted-foreground'>下一篇</p>
+                    <p class='mt-2 font-medium'>{page.nextDoc.title}</p>
+                  </a>
+                ) : (
+                  <div class='rounded-2xl border border-dashed p-4 text-sm text-muted-foreground'>
+                    已经是本课程最后一篇。
+                  </div>
+                )}
+              </div>
+
+              {sectionTree.length > 0 && (
+                <section class='bb-mobile-course-nav mt-8 rounded-2xl border p-4 lg:hidden'>
+                  <DocsTree
+                    tree={sectionTree}
+                    currentPath={Astro.url.pathname}
+                    currentSlug={slug}
+                    title={page?.currentSection?.label || doc.section_label}
+                  />
+                </section>
+              )}
+
+            </section>
+
+            <aside
+              class='animate top-20 z-30 min-w-48 overflow-y-scroll max-lg:hidden md:sticky lg:shrink-0'
+              style='height:calc(100vh - 7rem);'
+            >
+              {rendered.headings.length > 0 && <TOC headings={rendered.headings} />}
+            </aside>
+          </div>
+        </>
+      ) : (
+        <section class='rounded-[2rem] border p-8'>
+          <p class='text-sm text-muted-foreground'>404</p>
+          <h1 class='mt-3 text-3xl font-semibold'>文档不存在</h1>
+          <p class='mt-4 text-muted-foreground'>请返回文档列表查看其他内容。</p>
+        </section>
+      )
+    }
+  </main>
+  <BackToTop header='content-header' content='content' />
+</PageLayout>
+
+{config.integ.mediumZoom.enable && <MediumZoom background='#fff' />}
+
+<style>
+  .bb-docs-shell {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  @media (min-width: 1024px) {
+    .bb-docs-shell {
+      grid-template-columns: 15rem minmax(0, 1fr) 14rem;
+      align-items: start;
+    }
+  }
+
+  @media (min-width: 1280px) {
+    .bb-docs-shell {
+      grid-template-columns: 16rem minmax(0, 1fr) 15rem;
+      gap: 2rem;
+    }
+  }
+
+  .bb-docs-shell :global(toc-heading) {
+    display: block;
+    padding-right: 0.25rem;
+  }
+
+  .bb-mobile-course-nav {
+    background:
+      linear-gradient(180deg, hsl(var(--muted) / 0.22), hsl(var(--background) / 0.96));
+    border-color: hsl(var(--border) / 0.9);
+  }
+
+  .bb-mobile-course-nav :global(.bb-docs-tree) {
+    margin: 0;
+  }
+
+  .bb-mobile-course-nav :global(.bb-docs-title-main) {
+    margin: 0;
+    font-size: 1.02rem;
+  }
+
+  .bb-mobile-course-nav :global(.bb-docs-list .bb-docs-list) {
+    margin-left: 1.15rem;
+    padding-left: 0.45rem;
+    border-left: 1px dashed hsl(var(--border) / 0.9);
+  }
+
+  .bb-mobile-course-nav :global(.bb-docs-node.is-item .bb-docs-list .docs-item) {
+    margin-left: 0.25rem;
+  }
+
+  .bb-mobile-course-nav :global(.bb-docs-group) {
+    margin-top: 0.55rem;
+    margin-bottom: 0.15rem;
+  }
+</style>

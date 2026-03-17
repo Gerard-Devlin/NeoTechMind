@@ -1,0 +1,108 @@
+---
+import AdminEditorForm from '@/components/dynamic/AdminEditorForm.astro'
+import PageLayout from '@/layouts/BaseLayout.astro'
+import { getSessionFromCookies } from '@/lib/server/auth.mjs'
+import { getAdminCourseOptions, getContentById, parseNavPathInput, saveContent } from '@/lib/server/content.mjs'
+import '@/assets/styles/admin.css'
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+
+const id = Number(Astro.params.id)
+let record = await getContentById(id, session)
+const courseOptions = await getAdminCourseOptions(session)
+
+if (!record) {
+  Astro.response.status = 404
+}
+
+let error = ''
+const savedFlag = Astro.url.searchParams.get('saved') === '1'
+
+if (record && Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData()
+  const payload = {
+    id: record.id,
+    type: 'doc',
+    title: String(formData.get('title') || record.title),
+    subtitle: String(formData.get('subtitle') || record.subtitle || ''),
+    slug: String(formData.get('slug') || ''),
+    content: String(formData.get('content') || record.content),
+    status: String(formData.get('status') || record.status),
+    heroImage: String(formData.get('heroImage') || record.hero_image || ''),
+    sectionLabel: String(formData.get('sectionLabel') || record.section_label || ''),
+    navPath: parseNavPathInput(
+      String(formData.get('sectionPath') || (record.navPath || []).slice(1).join(' / ')),
+      String(formData.get('title') || record.title)
+    ),
+    navOrder: Number(formData.get('navOrder') || record.nav_order || 999),
+    publishedAt: String(formData.get('publishedAt') || record.published_at || ''),
+    sourcePath: record.source_path,
+    isImported: record.isImported
+  }
+
+  try {
+    record = await saveContent(payload, session)
+    return Astro.redirect(`/admin/edit/${record.id}?saved=1`)
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : '保存失败'
+    record = {
+      ...record,
+      ...payload,
+      section_label: payload.sectionLabel,
+      hero_image: payload.heroImage,
+      nav_order: payload.navOrder,
+      published_at: payload.publishedAt,
+      navPath: payload.navPath
+    }
+  }
+}
+
+const item = record
+  ? {
+      ...record,
+      sectionPath: (record.navPath || []).slice(1).join(' / ')
+    }
+  : null
+---
+
+<PageLayout meta={{ title: record?.title || '文章不存在', description: 'Edit course article' }} containerClass='max-w-[96rem]'>
+  <main class='admin-page py-7 md:py-8'>
+    <section class='admin-card p-7 md:p-8'>
+      {
+        item ? (
+          <>
+            <p class='admin-kicker'>Admin</p>
+            <h1 class='admin-title'>编辑文章</h1>
+            <p class='admin-desc'>当前登录：{session.username}</p>
+
+            {savedFlag && !error && <p class='admin-alert admin-alert-success'>保存成功</p>}
+            {error && <p class='admin-alert admin-alert-error'>{error}</p>}
+
+            <form class='mt-6' method='post'>
+              <AdminEditorForm item={item} submitLabel='保存修改' courseOptions={courseOptions} />
+            </form>
+
+            <form
+              class='mt-4 editor-actions'
+              method='post'
+              action={`/admin/delete/${item.id}`}
+              onsubmit={`return confirm('确定删除《${item.title.replace(/'/g, "\\'")}》吗？')`}
+            >
+              <button class='admin-btn admin-btn-danger editor-action-btn' type='submit'>
+                删除文章
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            <h1 class='admin-title'>文章不存在</h1>
+            <p class='admin-desc'>这个 ID 没有对应的文章记录。</p>
+          </>
+        )
+      }
+    </section>
+  </main>
+</PageLayout>

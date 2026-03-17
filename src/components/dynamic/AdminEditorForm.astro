@@ -1,0 +1,494 @@
+---
+import MarkdownContent from './MarkdownContent.astro'
+
+interface EditorItem {
+  id?: number
+  title?: string
+  subtitle?: string | null
+  slug?: string
+  content?: string
+  status?: string
+  hero_image?: string | null
+  section_label?: string | null
+  sectionPath?: string
+  nav_order?: number
+  published_at?: string | null
+  source_path?: string | null
+}
+
+interface Props {
+  item: EditorItem
+  submitLabel?: string
+  courseOptions?: string[]
+  previewHtml?: string
+  previewHasMermaid?: boolean
+}
+
+const {
+  item,
+  submitLabel = '保存文章',
+  courseOptions = [],
+  previewHtml = '',
+  previewHasMermaid = false
+} = Astro.props
+
+const initialPreviewHtml = previewHtml || '<p class="text-sm text-muted-foreground">实时预览加载中...</p>'
+
+function formatDateTimeLocal(value?: string | null) {
+  if (!value) return ''
+  return new Date(value).toISOString().slice(0, 16)
+}
+---
+
+<div
+  id='admin-editor-root'
+  data-upload-endpoint='/admin/upload-image'
+  data-preview-endpoint='/admin/preview-markdown'
+  data-content-id={item.id ? String(item.id) : ''}
+>
+  <div class='grid gap-4 md:grid-cols-2'>
+    <input name='type' type='hidden' value='doc' />
+
+    <label class='flex flex-col gap-2'>
+      <span class='text-sm font-medium'>文章标题</span>
+      <input class='rounded-xl border bg-background px-4 py-3' name='title' value={item.title || ''} required />
+    </label>
+
+    <label class='flex flex-col gap-2'>
+      <span class='text-sm font-medium'>课程名</span>
+      <input
+        class='rounded-xl border bg-background px-4 py-3'
+        name='sectionLabel'
+        value={item.section_label || ''}
+        list='course-options'
+        placeholder='例如：DBS'
+        required
+      />
+      <datalist id='course-options'>
+        {courseOptions.map((option) => <option value={option} />)}
+      </datalist>
+    </label>
+
+    <label class='flex flex-col gap-2'>
+      <span class='text-sm font-medium'>列表副标题</span>
+      <input
+        class='rounded-xl border bg-background px-4 py-3'
+        name='subtitle'
+        value={item.subtitle || ''}
+        placeholder='例如 Regression / CNN / PyTorch'
+      />
+    </label>
+
+    <label class='flex flex-col gap-2 md:col-span-2'>
+      <span class='text-sm font-medium'>课程内结构</span>
+      <input
+        class='rounded-xl border bg-background px-4 py-3'
+        name='sectionPath'
+        value={item.sectionPath || ''}
+        placeholder='留空则默认放到课程下；需要分组可写 ML / 监督学习'
+      />
+      <span class='text-xs text-muted-foreground'>使用 `/` 分层，会直接决定左侧目录结构。</span>
+    </label>
+
+    <label class='flex flex-col gap-2'>
+      <span class='text-sm font-medium'>同级排序</span>
+      <input
+        class='rounded-xl border bg-background px-4 py-3'
+        name='navOrder'
+        type='number'
+        value={String(item.nav_order ?? 999)}
+      />
+      <span class='text-xs text-muted-foreground'>数字越小越靠前。</span>
+    </label>
+
+    <label class='flex flex-col gap-2'>
+      <span class='text-sm font-medium'>自定义 Slug</span>
+      <input
+        class='rounded-xl border bg-background px-4 py-3'
+        name='slug'
+        value={item.slug || ''}
+        placeholder='可留空，系统会按课程和结构自动生成'
+      />
+    </label>
+
+    <label class='flex flex-col gap-2'>
+      <span class='text-sm font-medium'>状态</span>
+      <select class='rounded-xl border bg-background px-4 py-3' name='status'>
+        <option value='draft' selected={item.status !== 'published'}>草稿</option>
+        <option value='published' selected={item.status === 'published'}>已发布</option>
+      </select>
+    </label>
+
+    <label class='flex flex-col gap-2'>
+      <span class='text-sm font-medium'>发布时间</span>
+      <input
+        class='rounded-xl border bg-background px-4 py-3'
+        name='publishedAt'
+        type='datetime-local'
+        value={formatDateTimeLocal(item.published_at)}
+      />
+    </label>
+
+    <label class='flex flex-col gap-2 md:col-span-2'>
+      <span class='text-sm font-medium'>封面图 URL</span>
+      <input
+        class='rounded-xl border bg-background px-4 py-3'
+        name='heroImage'
+        value={item.hero_image || ''}
+        placeholder='/uploads/your-image.png'
+      />
+    </label>
+
+    {
+      item.source_path && (
+        <label class='flex flex-col gap-2 md:col-span-2'>
+          <span class='text-sm font-medium'>导入来源</span>
+          <input class='rounded-xl border bg-muted/40 px-4 py-3' value={item.source_path} readonly />
+        </label>
+      )
+    }
+
+    <section class='md:col-span-2'>
+      <div class='mb-2 flex flex-wrap items-center gap-2'>
+        <span class='text-sm font-medium'>正文 Markdown</span>
+        <button
+          id='editor-upload-trigger'
+          class='rounded-full border px-3 py-1 text-xs hover:bg-muted/40'
+          type='button'
+        >
+          上传图片并插入
+        </button>
+        <input id='editor-upload-input' class='hidden' type='file' accept='image/*' />
+        <span id='editor-upload-status' class='text-xs text-muted-foreground' aria-live='polite'></span>
+        <span id='editor-preview-status' class='text-xs text-muted-foreground' aria-live='polite'></span>
+      </div>
+
+      <div class='editor-live-grid'>
+        <textarea
+          id='editor-content-input'
+          class='rounded-2xl border bg-background px-4 py-3 font-mono text-sm leading-7'
+          name='content'
+          required
+        >{item.content || ''}</textarea>
+
+        <div id='editor-live-preview' class='rounded-2xl border bg-muted/20 px-4 py-4 sm:px-6 sm:py-5'>
+          <MarkdownContent html={initialPreviewHtml} hasMermaid={previewHasMermaid} />
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class='mt-6 editor-actions'>
+    <button
+      class='admin-btn admin-btn-primary editor-action-btn'
+      type='submit'
+      name='intent'
+      value='save'
+    >
+      {submitLabel}
+    </button>
+    <a class='rounded-full border px-5 py-3 hover:bg-muted/40' href='/admin/uploads'>上传图片</a>
+    <a class='rounded-full border px-5 py-3 hover:bg-muted/40' href='/admin'>返回后台</a>
+  </div>
+</div>
+
+<script>
+  (() => {
+    const root = document.getElementById('admin-editor-root')
+    if (!root) return
+
+    const textarea = root.querySelector('textarea[name="content"]')
+    const sectionInput = root.querySelector('input[name="sectionLabel"]')
+    const trigger = document.getElementById('editor-upload-trigger')
+    const fileInput = document.getElementById('editor-upload-input')
+    const statusNode = document.getElementById('editor-upload-status')
+    const previewStatusNode = document.getElementById('editor-preview-status')
+    const previewHost = document.getElementById('editor-live-preview')
+
+    const previewMarkdown = previewHost?.querySelector('.bb-markdown')
+
+    if (
+      !(textarea instanceof HTMLTextAreaElement) ||
+      !(sectionInput instanceof HTMLInputElement) ||
+      !(trigger instanceof HTMLButtonElement) ||
+      !(fileInput instanceof HTMLInputElement)
+    ) {
+      return
+    }
+
+    const uploadEndpoint = root.getAttribute('data-upload-endpoint') || '/admin/upload-image'
+    const previewEndpoint = root.getAttribute('data-preview-endpoint') || '/admin/preview-markdown'
+    const contentId = root.getAttribute('data-content-id') || ''
+
+    const setStatus = (message: string, isError = false) => {
+      if (!statusNode) return
+      statusNode.textContent = message
+      statusNode.classList.toggle('text-red-600', isError)
+      statusNode.classList.toggle('text-muted-foreground', !isError)
+    }
+
+    const setPreviewStatus = (message: string, isError = false) => {
+      if (!previewStatusNode) return
+      previewStatusNode.textContent = message
+      previewStatusNode.classList.toggle('text-red-600', isError)
+      previewStatusNode.classList.toggle('text-muted-foreground', !isError)
+    }
+
+    const toAltText = (name: string) => {
+      const normalized = String(name || '')
+        .replace(/\.[^.]+$/, '')
+        .replace(/[-_]+/g, ' ')
+        .trim()
+      return normalized || 'image'
+    }
+
+    const updatePreviewDom = (html: string, hasMermaid: boolean) => {
+      if (!(previewMarkdown instanceof HTMLElement)) return
+      previewMarkdown.innerHTML = html || '<p class="text-sm text-muted-foreground">暂无内容</p>'
+      previewMarkdown.setAttribute('data-has-mermaid', hasMermaid ? 'true' : 'false')
+      document.dispatchEvent(new Event('astro:page-load'))
+      syncFromEditor()
+    }
+
+    const insertMarkdown = (markdown: string) => {
+      const source = textarea.value || ''
+      const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : source.length
+      const end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : start
+      const before = source.slice(0, start)
+      const after = source.slice(end)
+
+      const prefix = before && !before.endsWith('\n') ? '\n' : ''
+      const suffix = after && !after.startsWith('\n') ? '\n' : ''
+      const payload = `${prefix}${markdown}${suffix}`
+      const nextValue = `${before}${payload}${after}`
+
+      textarea.value = nextValue
+      const caret = before.length + payload.length
+      textarea.setSelectionRange(caret, caret)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      textarea.focus()
+    }
+
+    const uploadSelectedFile = async (file: File) => {
+      const sectionLabel = sectionInput.value.trim()
+      if (!sectionLabel) {
+        setStatus('请先填写课程名。', true)
+        sectionInput.focus()
+        return
+      }
+
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('sectionLabel', sectionLabel)
+      if (contentId) {
+        formData.append('contentId', contentId)
+      }
+
+      trigger.disabled = true
+      setStatus('正在上传...')
+
+      try {
+        const response = await fetch(uploadEndpoint, {
+          method: 'POST',
+          body: formData,
+          credentials: 'same-origin'
+        })
+        const payload = await response.json().catch(() => null)
+
+        if (!response.ok || !payload?.ok || !payload?.path) {
+          throw new Error(payload?.message || '上传失败，请稍后重试。')
+        }
+
+        insertMarkdown(`![${toAltText(file.name)}](${payload.path})`)
+        setStatus(`已插入 ${payload.path}`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '上传失败，请稍后重试。'
+        setStatus(message, true)
+      } finally {
+        trigger.disabled = false
+        fileInput.value = ''
+      }
+    }
+
+    const extractImageFilesFromClipboard = (event: ClipboardEvent) => {
+      const files: File[] = []
+      const dataTransfer = event.clipboardData
+      if (!dataTransfer) return files
+
+      for (const item of Array.from(dataTransfer.items || [])) {
+        if (item.kind !== 'file') continue
+        const file = item.getAsFile()
+        if (file && file.type.startsWith('image/')) {
+          files.push(file)
+        }
+      }
+
+      return files
+    }
+
+    let previewTimer = 0
+    let previewController: AbortController | null = null
+    let previewRequestId = 0
+    let previewAppliedId = 0
+    let lockEditorScrollSync = false
+    let lockPreviewScrollSync = false
+
+    const syncScrollByRatio = (source: HTMLElement, target: HTMLElement) => {
+      const sourceRange = Math.max(1, source.scrollHeight - source.clientHeight)
+      const targetRange = Math.max(1, target.scrollHeight - target.clientHeight)
+      const ratio = source.scrollTop / sourceRange
+      target.scrollTop = ratio * targetRange
+    }
+
+    const syncFromEditor = () => {
+      if (!(previewHost instanceof HTMLElement)) return
+      if (lockPreviewScrollSync) return
+      lockEditorScrollSync = true
+      syncScrollByRatio(textarea, previewHost)
+      requestAnimationFrame(() => {
+        lockEditorScrollSync = false
+      })
+    }
+
+    const syncFromPreview = () => {
+      if (!(previewHost instanceof HTMLElement)) return
+      if (lockEditorScrollSync) return
+      lockPreviewScrollSync = true
+      syncScrollByRatio(previewHost, textarea)
+      requestAnimationFrame(() => {
+        lockPreviewScrollSync = false
+      })
+    }
+
+    const renderPreview = async (content: string) => {
+      if (!(previewMarkdown instanceof HTMLElement)) return
+
+      previewRequestId += 1
+      const currentId = previewRequestId
+      previewController?.abort()
+      previewController = new AbortController()
+
+      setPreviewStatus('预览更新中...')
+
+      try {
+        const response = await fetch(previewEndpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ content }),
+          signal: previewController.signal
+        })
+
+        const payload = await response.json().catch(() => null)
+        if (!response.ok || !payload?.ok) {
+          throw new Error(payload?.message || '预览渲染失败。')
+        }
+
+        if (currentId < previewAppliedId) return
+        previewAppliedId = currentId
+        updatePreviewDom(String(payload.html || ''), Boolean(payload.hasMermaid))
+        setPreviewStatus('')
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        const message = error instanceof Error ? error.message : '预览渲染失败。'
+        setPreviewStatus(message, true)
+      }
+    }
+
+    const schedulePreview = () => {
+      if (previewTimer) window.clearTimeout(previewTimer)
+      previewTimer = window.setTimeout(() => {
+        void renderPreview(textarea.value || '')
+      }, 280)
+    }
+
+    trigger.addEventListener('click', () => {
+      fileInput.click()
+    })
+
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files?.[0]
+      if (!file) return
+      await uploadSelectedFile(file)
+    })
+
+    textarea.addEventListener('input', () => {
+      schedulePreview()
+    })
+    textarea.addEventListener('scroll', () => {
+      syncFromEditor()
+    })
+
+    if (previewHost instanceof HTMLElement) {
+      previewHost.addEventListener('scroll', () => {
+        syncFromPreview()
+      })
+    }
+
+    textarea.addEventListener('paste', async (event) => {
+      const imageFiles = extractImageFilesFromClipboard(event)
+      if (imageFiles.length === 0) return
+
+      event.preventDefault()
+      for (const file of imageFiles) {
+        await uploadSelectedFile(file)
+      }
+    })
+
+    textarea.addEventListener('dragover', (event) => {
+      const transfer = event.dataTransfer
+      if (!transfer) return
+      const hasImage = Array.from(transfer.items || []).some(
+        (item) => item.kind === 'file' && item.type.startsWith('image/')
+      )
+      if (!hasImage) return
+      event.preventDefault()
+      transfer.dropEffect = 'copy'
+    })
+
+    textarea.addEventListener('drop', async (event) => {
+      const transfer = event.dataTransfer
+      if (!transfer) return
+      const files = Array.from(transfer.files || []).filter((file) => file.type.startsWith('image/'))
+      if (files.length === 0) return
+
+      event.preventDefault()
+      for (const file of files) {
+        await uploadSelectedFile(file)
+      }
+    })
+
+    void renderPreview(textarea.value || '')
+  })()
+</script>
+
+<style>
+  .editor-live-grid {
+    display: grid;
+    gap: 0.8rem;
+  }
+
+  #editor-content-input,
+  #editor-live-preview {
+    height: clamp(19rem, 60vh, 34rem);
+    max-height: clamp(19rem, 60vh, 34rem);
+    overflow: auto;
+  }
+
+  #editor-content-input {
+    resize: vertical;
+  }
+
+  @media (min-width: 1024px) {
+    .editor-live-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      align-items: start;
+    }
+
+    #editor-content-input,
+    #editor-live-preview {
+      height: clamp(24rem, 70vh, 42rem);
+      max-height: clamp(24rem, 70vh, 42rem);
+    }
+  }
+</style>

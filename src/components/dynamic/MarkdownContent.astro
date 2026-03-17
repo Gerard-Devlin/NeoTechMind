@@ -1,0 +1,278 @@
+---
+import config from '../../site.config.ts'
+
+interface Props {
+  html: string
+  hasMermaid?: boolean
+}
+
+const { html, hasMermaid = false } = Astro.props
+const typographyClass = config.integ?.typography?.class || 'prose text-base'
+---
+
+<div
+  class={`bb-markdown max-w-none ${typographyClass}`}
+  data-has-mermaid={hasMermaid ? 'true' : 'false'}
+  set:html={html}
+></div>
+
+<script>
+  let mermaidModulePromise
+
+  function setupTabs(root = document) {
+    root.querySelectorAll('[data-bb-tabs]').forEach((group) => {
+      if (group instanceof HTMLElement && group.dataset.tabsReady === 'true') return
+      if (group instanceof HTMLElement) {
+        group.dataset.tabsReady = 'true'
+      }
+
+      const buttons = [...group.querySelectorAll('.bb-tab-trigger')]
+      const panels = [...group.querySelectorAll('.bb-tab-panel')]
+
+      buttons.forEach((button, index) => {
+        button.addEventListener('click', () => {
+          buttons.forEach((item) => item.classList.remove('is-active'))
+          panels.forEach((panel) => panel.classList.remove('is-active'))
+          button.classList.add('is-active')
+          panels[index]?.classList.add('is-active')
+        })
+      })
+    })
+  }
+
+  function setupCopyButtons(root = document) {
+    root.querySelectorAll('.bb-markdown .astro-code').forEach((block) => {
+      if (!(block instanceof HTMLElement) || block.dataset.copyReady === 'true') return
+      block.dataset.copyReady = 'true'
+
+      const code = block.querySelector('code')
+      if (!code) return
+
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'copy text-muted-foreground p-1 box-content border rounded-lg bg-card'
+      button.setAttribute('aria-label', 'Copy code')
+      button.innerHTML = `
+        <div class="ready">
+          <svg class="size-5"><use href="/icons/code.svg#mingcute-clipboard-line"></use></svg>
+        </div>
+        <div class="success hidden">
+          <svg class="size-5"><use href="/icons/code.svg#mingcute-file-check-line"></use></svg>
+        </div>
+      `
+
+      button.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(code.textContent || '')
+          button.classList.add('copied')
+          window.setTimeout(() => button.classList.remove('copied'), 1800)
+        } catch (error) {
+          console.error('Failed to copy code block', error)
+        }
+      })
+
+      block.append(button)
+    })
+  }
+
+  function setupZoomableImages(root = document) {
+    root.querySelectorAll('.bb-markdown img').forEach((image) => {
+      if (!(image instanceof HTMLElement)) return
+      if (image.closest('.mermaid')) return
+      image.classList.add('zoomable')
+    })
+  }
+
+  async function renderMermaid(root = document) {
+    const containers = [...root.querySelectorAll('.bb-markdown[data-has-mermaid="true"]')]
+    if (containers.length === 0) return
+
+    const blocks = [...root.querySelectorAll('.bb-markdown .mermaid:not([data-mermaid-ready])')]
+    if (blocks.length === 0) return
+
+    mermaidModulePromise ??= import('mermaid').then(({ default: mermaid }) => {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'loose',
+        theme: document.documentElement.classList.contains('dark') ? 'dark' : 'neutral'
+      })
+      return mermaid
+    })
+
+    const mermaid = await mermaidModulePromise
+
+    blocks.forEach((block) => {
+      block.setAttribute('data-mermaid-ready', 'pending')
+      block.textContent = block.textContent?.trim() || ''
+    })
+
+    try {
+      await mermaid.run({ nodes: blocks })
+      blocks.forEach((block) => block.setAttribute('data-mermaid-ready', 'true'))
+    } catch (error) {
+      console.error('Failed to render Mermaid diagram', error)
+      blocks.forEach((block) => block.setAttribute('data-mermaid-ready', 'error'))
+    }
+  }
+
+  async function initDynamicMarkdown() {
+    setupTabs(document)
+    setupCopyButtons(document)
+    setupZoomableImages(document)
+    await renderMermaid(document)
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener(
+      'DOMContentLoaded',
+      () => {
+        void initDynamicMarkdown()
+      },
+      { once: true }
+    )
+  } else {
+    void initDynamicMarkdown()
+  }
+
+  document.addEventListener('astro:page-load', () => {
+    void initDynamicMarkdown()
+  })
+</script>
+
+<style>
+  .bb-markdown :global(.bb-inline-toc) {
+    margin: 1.5rem 0;
+    border: 1px solid hsl(var(--border) / 0.8);
+    border-radius: 1rem;
+    background: hsl(var(--muted) / 0.25);
+    padding: 1rem 1.1rem;
+  }
+
+  .bb-markdown :global(.bb-inline-toc-title) {
+    margin: 0 0 0.85rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .bb-markdown :global(.bb-inline-toc ul) {
+    margin: 0.35rem 0 0.35rem 1.1rem;
+  }
+
+  .bb-markdown :global(.bb-inline-toc li) {
+    margin: 0.25rem 0;
+  }
+
+  .bb-markdown :global(.bb-inline-toc a) {
+    text-decoration: none;
+  }
+
+  .bb-markdown :global(.bb-inline-toc a:hover) {
+    text-decoration: underline;
+  }
+
+  .bb-markdown :global(.bb-callout) {
+    margin: 1.5rem 0;
+    border-radius: 1rem;
+    border: 1px solid hsl(var(--border) / 0.8);
+    background: hsl(var(--muted) / 0.55);
+    padding: 1rem 1.125rem;
+  }
+
+  .bb-markdown :global(.bb-callout summary) {
+    cursor: pointer;
+    font-weight: 600;
+    list-style: none;
+  }
+
+  .bb-markdown :global(.bb-callout summary::-webkit-details-marker) {
+    display: none;
+  }
+
+  .bb-markdown :global(.bb-callout-title) {
+    margin-bottom: 0.75rem;
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .bb-markdown :global(.bb-callout-body > :first-child) {
+    margin-top: 0;
+  }
+
+  .bb-markdown :global(.bb-callout-note) {
+    border-left: 4px solid #3b82f6;
+  }
+
+  .bb-markdown :global(.bb-callout-tip),
+  .bb-markdown :global(.bb-callout-success) {
+    border-left: 4px solid #10b981;
+  }
+
+  .bb-markdown :global(.bb-callout-warning),
+  .bb-markdown :global(.bb-callout-caution),
+  .bb-markdown :global(.bb-callout-question) {
+    border-left: 4px solid #f59e0b;
+  }
+
+  .bb-markdown :global(.bb-callout-danger),
+  .bb-markdown :global(.bb-callout-bug),
+  .bb-markdown :global(.bb-callout-failure),
+  .bb-markdown :global(.bb-callout-dangerous) {
+    border-left: 4px solid #ef4444;
+  }
+
+  .bb-markdown :global(.bb-tabs) {
+    margin: 1.5rem 0;
+    overflow: hidden;
+    border: 1px solid hsl(var(--border) / 0.9);
+    border-radius: 1rem;
+    background: hsl(var(--muted) / 0.35);
+  }
+
+  .bb-markdown :global(.bb-tab-list) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    border-bottom: 1px solid hsl(var(--border) / 0.8);
+    padding: 0.75rem;
+  }
+
+  .bb-markdown :global(.bb-tab-trigger) {
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+    font: inherit;
+    padding: 0.45rem 0.9rem;
+  }
+
+  .bb-markdown :global(.bb-tab-trigger.is-active) {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  }
+
+  .bb-markdown :global(.bb-tab-panel) {
+    display: none;
+    padding: 1rem 1.1rem;
+  }
+
+  .bb-markdown :global(.bb-tab-panel.is-active) {
+    display: block;
+  }
+
+  .bb-markdown :global(.mermaid) {
+    overflow-x: auto;
+    text-align: center;
+  }
+
+  .bb-markdown :global(.mermaid svg) {
+    max-width: 100%;
+    height: auto;
+  }
+
+</style>

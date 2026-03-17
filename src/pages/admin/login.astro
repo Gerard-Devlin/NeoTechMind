@@ -1,0 +1,57 @@
+---
+import PageLayout from '@/layouts/BaseLayout.astro'
+import { createAdminSession, getSessionFromCookies, setSessionCookie, verifyAdminCredentials } from '@/lib/server/auth.mjs'
+import '@/assets/styles/admin.css'
+
+const existingSession = await getSessionFromCookies(Astro.cookies)
+if (existingSession) {
+  return Astro.redirect('/admin')
+}
+
+let error = ''
+
+if (Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData()
+  const username = String(formData.get('username') || '')
+  const password = String(formData.get('password') || '')
+
+  const user = await verifyAdminCredentials(username, password)
+  if (user) {
+    const session = await createAdminSession(user)
+    setSessionCookie(Astro.cookies, session.token, session.expiresAt)
+    return Astro.redirect('/admin')
+  }
+
+  error = '用户名或密码不正确'
+}
+---
+
+<PageLayout meta={{ title: '后台登录', description: 'NeoTechMind admin login' }}>
+  <main class='admin-page mx-auto max-w-xl py-14'>
+    <section class='admin-card p-8'>
+      <p class='admin-kicker'>Admin</p>
+      <h1 class='admin-title'>登录后台</h1>
+      <p class='admin-desc'>
+        首次启动会根据 <code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code> 自动初始化管理员账号。
+      </p>
+
+      {error && <p class='admin-alert admin-alert-error'>{error}</p>}
+
+      <form class='mt-6 flex flex-col gap-4' method='post'>
+        <label class='admin-label'>
+          <span>用户名</span>
+          <input class='admin-input' name='username' required />
+        </label>
+
+        <label class='admin-label'>
+          <span>密码</span>
+          <input class='admin-input' name='password' type='password' required />
+        </label>
+
+        <button class='admin-btn admin-btn-primary mt-2 w-fit' type='submit'>
+          登录
+        </button>
+      </form>
+    </section>
+  </main>
+</PageLayout>

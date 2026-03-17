@@ -1,0 +1,83 @@
+---
+import AdminEditorForm from '@/components/dynamic/AdminEditorForm.astro'
+import PageLayout from '@/layouts/BaseLayout.astro'
+import { getSessionFromCookies } from '@/lib/server/auth.mjs'
+import { getAdminCourseOptions, parseNavPathInput, saveContent } from '@/lib/server/content.mjs'
+import '@/assets/styles/admin.css'
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+
+const courseOptions = await getAdminCourseOptions(session)
+const presetCourse = String(Astro.url.searchParams.get('course') || '').trim()
+const presetSectionPath = String(Astro.url.searchParams.get('sectionPath') || '').trim()
+
+let error = ''
+let item: any = {
+  title: '',
+  subtitle: '',
+  slug: '',
+  content: '',
+  status: 'published',
+  hero_image: '',
+  section_label: presetCourse || courseOptions[0] || '',
+  sectionPath: presetSectionPath,
+  nav_order: 999,
+  published_at: ''
+}
+
+if (Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData()
+  item = {
+    title: String(formData.get('title') || ''),
+    subtitle: String(formData.get('subtitle') || ''),
+    slug: String(formData.get('slug') || ''),
+    content: String(formData.get('content') || ''),
+    status: String(formData.get('status') || 'draft'),
+    hero_image: String(formData.get('heroImage') || ''),
+    section_label: String(formData.get('sectionLabel') || ''),
+    sectionPath: String(formData.get('sectionPath') || ''),
+    nav_order: Number(formData.get('navOrder') || 999),
+    published_at: String(formData.get('publishedAt') || '')
+  }
+
+  try {
+    const created = await saveContent(
+      {
+        type: 'doc',
+        title: item.title,
+        subtitle: item.subtitle,
+        slug: item.slug,
+        content: item.content,
+        status: item.status,
+        heroImage: item.hero_image,
+        sectionLabel: item.section_label,
+        navPath: parseNavPathInput(item.sectionPath, item.title),
+        navOrder: item.nav_order,
+        publishedAt: item.published_at
+      },
+      session
+    )
+    return Astro.redirect(`/admin/edit/${Number(created.id)}?saved=1`)
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : '保存失败'
+  }
+}
+---
+
+<PageLayout meta={{ title: '新建文章', description: 'Create course article' }} containerClass='max-w-[96rem]'>
+  <main class='admin-page py-7 md:py-8'>
+    <section class='admin-card p-7 md:p-8'>
+      <p class='admin-kicker'>Admin</p>
+      <h1 class='admin-title'>新建课程文章</h1>
+      <p class='admin-desc'>当前登录：{session.username}</p>
+      {error && <p class='admin-alert admin-alert-error'>{error}</p>}
+
+      <form class='mt-6' method='post'>
+        <AdminEditorForm item={item} submitLabel='创建文章' courseOptions={courseOptions} />
+      </form>
+    </section>
+  </main>
+</PageLayout>

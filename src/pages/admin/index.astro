@@ -1,0 +1,600 @@
+---
+import PageLayout from '@/layouts/BaseLayout.astro'
+import { getSessionFromCookies, isAdminSession } from '@/lib/server/auth.mjs'
+import { getAdminDashboardData } from '@/lib/server/content.mjs'
+import '@/assets/styles/admin.css'
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+
+const isAdmin = isAdminSession(session)
+const courses = await getAdminDashboardData(session)
+const deletedFlag = Astro.url.searchParams.get('deleted') === '1'
+const requestedCourseKey = String(Astro.url.searchParams.get('course') || '').trim()
+const activeCourseKey =
+  courses.find((course: any) => course.key === requestedCourseKey)?.key || courses[0]?.key || ''
+
+function buildNewDocHref(courseLabel = '') {
+  const query = new URLSearchParams()
+  if (String(courseLabel || '').trim()) {
+    query.set('course', String(courseLabel).trim())
+  }
+  const text = query.toString()
+  return text ? `/admin/new?${text}` : '/admin/new'
+}
+---
+
+<PageLayout
+  meta={{ title: '后台管理', description: 'NeoTechMind admin dashboard' }}
+  containerClass='max-w-[96rem]'
+>
+  <main class='admin-page py-7 md:py-8' data-is-admin={isAdmin ? '1' : '0'}>
+    <section class='admin-top'>
+      <div>
+        <p class='admin-kicker'>Admin</p>
+        <h1 class='admin-title'>课程与文档管理</h1>
+        <p class='admin-desc'>
+          当前登录：{session.username}（{isAdmin ? '管理员' : '普通用户'}）
+        </p>
+      </div>
+
+      <div class='admin-toolbar'>
+        <a class='admin-btn admin-btn-primary' href='/admin/new'>新建文章</a>
+        {isAdmin && <a class='admin-btn' href='/admin/users'>用户管理</a>}
+        <a class='admin-btn' href='/admin/uploads'>上传图片</a>
+        <a class='admin-btn' href='/admin/logout'>退出登录</a>
+      </div>
+    </section>
+
+    <div class='admin-note mt-5 flex flex-wrap items-center justify-between gap-3'>
+      <p>
+        {isAdmin
+          ? '管理员可以拖拽调整课程顺序，也可以调整课程内文档顺序。'
+          : '普通用户仅能管理自己创建的文档；全局课程排序仅管理员可修改。'}
+      </p>
+      <p id='admin-reorder-status' aria-live='polite'></p>
+    </div>
+
+    {deletedFlag && (
+      <p class='admin-alert admin-alert-success'>
+        删除成功
+      </p>
+    )}
+
+    <section class='admin-shell mt-6'>
+      <aside class='admin-card admin-side p-4'>
+        <div class='mb-3 flex items-center justify-between'>
+          <h2 class='text-base font-semibold'>课程</h2>
+          <span class='text-xs text-muted-foreground'>{courses.length} 门</span>
+        </div>
+
+        {
+          courses.length === 0 ? (
+            <p class='rounded-xl border border-dashed px-3 py-4 text-sm text-muted-foreground'>还没有课程内容。</p>
+          ) : (
+            <ul id='course-list' class='admin-course-list' data-active-course={activeCourseKey}>
+              {courses.map((course: any) => (
+                <li
+                  class='admin-course-item'
+                  data-course-key={course.key}
+                  data-course-label={course.label}
+                  draggable={isAdmin ? 'true' : 'false'}
+                >
+                  <button class='course-switch w-full text-left' type='button' data-course-key={course.key}>
+                    <span class='course-main'>
+                      <span class='course-label'>{course.label}</span>
+                      <span class='course-count'>{course.docs.length}</span>
+                    </span>
+                    <span class='course-meta'>最近更新：{new Date(course.updatedAt).toLocaleString('zh-CN')}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+
+        <div class='admin-side-actions mt-4 border-t pt-3'>
+          <button id='quick-add-course' class='admin-btn' type='button'>
+            + 添加课程
+          </button>
+        </div>
+      </aside>
+
+      <section class='admin-card p-4 md:p-5'>
+        {
+          courses.length === 0 ? (
+            <div class='rounded-[1.25rem] border border-dashed p-8 text-muted-foreground'>还没有内容，先去创建一篇文章吧。</div>
+          ) : (
+            courses.map((course: any) => (
+              <article class='admin-course-panel' data-course-key={course.key} hidden={course.key !== activeCourseKey}>
+                <div class='flex flex-wrap items-end justify-between gap-3 border-b pb-4'>
+                  <div>
+                    <p class='admin-kicker'>当前课程</p>
+                    <h3 class='mt-1 text-2xl font-semibold'>{course.label}</h3>
+                    <p class='mt-1 text-sm text-muted-foreground'>{course.docs.length} 篇文章</p>
+                  </div>
+
+                  <div class='admin-toolbar'>
+                    <a class='admin-btn' href={buildNewDocHref(course.label)}>
+                      + 添加文章
+                    </a>
+                    <a
+                      class='admin-btn'
+                      href={course.docs[0] ? `/docs/${course.docs[0].slug}` : '/docs'}
+                      target='_blank'
+                    >
+                      预览课程
+                    </a>
+                    {isAdmin && (
+                      <button
+                        class='admin-btn course-rename-btn'
+                        type='button'
+                        data-course-key={course.key}
+                        data-course-label={course.label}
+                      >
+                        重命名课程
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <button
+                        class='admin-btn admin-btn-danger course-hide-btn'
+                        type='button'
+                        data-course-key={course.key}
+                        data-course-label={course.label}
+                      >
+                        隐藏课程
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <button
+                        class='admin-btn admin-btn-primary course-show-btn'
+                        type='button'
+                        data-course-key={course.key}
+                        data-course-label={course.label}
+                      >
+                        显示课程
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <ul class='admin-doc-list mt-4 flex flex-col gap-2' data-section-key={course.key}>
+                  {course.docs.map((item: any) => (
+                    <li class='admin-doc-row' data-doc-id={item.id} draggable='true'>
+                      <span class='doc-drag-handle' aria-hidden='true'></span>
+                      <div class='doc-main'>
+                        <p class='doc-title'>{item.title}</p>
+                        {item.subtitle && <p class='doc-subtitle'>{item.subtitle}</p>}
+                        <p class='doc-path'>{(item.navPath || []).slice(1).join(' / ') || item.title}</p>
+                      </div>
+
+                      <div class='doc-side'>
+                        <span class='doc-meta'>{item.status === 'published' ? '已发布' : '草稿'}</span>
+                        <span class='doc-meta'>排序 {item.nav_order ?? 999}</span>
+                      </div>
+
+                      <div class='doc-actions'>
+                        <a class='admin-btn admin-btn-sm' href={`/admin/edit/${item.id}`}>编辑</a>
+                        <a class='admin-btn admin-btn-sm' href={`/docs/${item.slug}`} target='_blank'>查看</a>
+                        <form
+                          method='post'
+                          action={`/admin/delete/${item.id}`}
+                          onsubmit={`return confirm('确定删除《${item.title.replace(/'/g, "\\'")}》吗？')`}
+                        >
+                          <button class='admin-btn admin-btn-sm admin-btn-danger' type='submit'>删除</button>
+                        </form>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))
+          )
+        }
+      </section>
+    </section>
+  </main>
+</PageLayout>
+
+<script>
+  // @ts-nocheck
+  const main = document.querySelector('main[data-is-admin]')
+  const isAdmin = main?.getAttribute('data-is-admin') === '1'
+  const status = document.getElementById('admin-reorder-status')
+  const courseList = document.getElementById('course-list')
+  const courseItems = [...document.querySelectorAll('.admin-course-item')]
+  const coursePanels = [...document.querySelectorAll('.admin-course-panel')]
+  const quickAddCourse = document.getElementById('quick-add-course')
+
+  function setStatus(message, isError = false) {
+    if (!status) return
+    status.textContent = message
+    status.classList.toggle('text-red-600', isError)
+    status.classList.toggle('text-green-600', !isError && !!message)
+  }
+
+  async function saveOrder(payload) {
+    const response = await fetch('/admin/reorder', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.message || '保存失败')
+    }
+  }
+
+  function activateCourse(courseKey, syncUrl = true) {
+    if (!courseKey) return
+
+    courseItems.forEach((item) => {
+      item.classList.toggle('is-active', item.getAttribute('data-course-key') === courseKey)
+    })
+    coursePanels.forEach((panel) => {
+      panel.hidden = panel.getAttribute('data-course-key') !== courseKey
+    })
+
+    if (syncUrl) {
+      const url = new URL(window.location.href)
+      url.searchParams.set('course', courseKey)
+      history.replaceState({}, '', url)
+    }
+  }
+
+  function installSortableList(container, itemSelector, buildPayload) {
+    if (!container) return
+
+    let draggingItem = null
+    const items = [...container.querySelectorAll(itemSelector)]
+
+    items.forEach((item) => {
+      item.addEventListener('dragstart', () => {
+        draggingItem = item
+        item.classList.add('is-dragging')
+      })
+
+      item.addEventListener('dragend', async () => {
+        item.classList.remove('is-dragging')
+        draggingItem = null
+
+        try {
+          setStatus('正在保存排序...')
+          await saveOrder(buildPayload())
+          setStatus('排序已保存')
+        } catch (error) {
+          console.error(error)
+          setStatus(error instanceof Error ? error.message : '排序保存失败', true)
+        }
+      })
+    })
+
+    container.addEventListener('dragover', (event) => {
+      event.preventDefault()
+      const target = event.target instanceof Element ? event.target.closest(itemSelector) : null
+      if (!target || !draggingItem || target === draggingItem) return
+
+      const rect = target.getBoundingClientRect()
+      const shouldInsertAfter = event.clientY > rect.top + rect.height / 2
+      const sibling = shouldInsertAfter ? target.nextElementSibling : target
+      if (sibling !== draggingItem) {
+        container.insertBefore(draggingItem, sibling)
+      }
+    })
+  }
+
+  courseList?.querySelectorAll('.course-switch').forEach((button) => {
+    button.addEventListener('click', () => {
+      activateCourse(button.getAttribute('data-course-key'))
+    })
+  })
+
+  quickAddCourse?.addEventListener('click', () => {
+    const raw = window.prompt('输入新课程名称')
+    const name = String(raw || '').trim()
+    if (!name) return
+    window.location.href = `/admin/new?course=${encodeURIComponent(name)}&newCourse=1`
+  })
+
+  async function postCourseAction(endpoint, payload, fallbackMessage) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.message || fallbackMessage)
+    }
+  }
+
+  document.querySelectorAll('.course-rename-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const courseKey = button.getAttribute('data-course-key') || ''
+      const courseLabel = button.getAttribute('data-course-label') || ''
+      if (!courseKey) return
+
+      const raw = window.prompt('请输入新的课程名称', courseLabel)
+      const nextLabel = String(raw || '').trim()
+      if (!nextLabel || nextLabel === courseLabel) return
+
+      try {
+        setStatus('正在保存...')
+        await postCourseAction(
+          '/admin/rename-course',
+          { sectionKey: courseKey, label: nextLabel },
+          '重命名失败'
+        )
+        setStatus('已保存')
+        window.location.href = `/admin?course=${encodeURIComponent(courseKey)}`
+      } catch (error) {
+        console.error(error)
+        setStatus(error instanceof Error ? error.message : '重命名失败', true)
+      }
+    })
+  })
+
+  document.querySelectorAll('.course-hide-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const courseKey = button.getAttribute('data-course-key') || ''
+      const courseLabel = button.getAttribute('data-course-label') || ''
+      if (!courseKey) return
+
+      const confirmed = window.confirm(`确认隐藏课程「${courseLabel}」？该课程下所有文章将设为草稿。`)
+      if (!confirmed) return
+
+      try {
+        setStatus('正在保存...')
+        await postCourseAction('/admin/hide-course', { sectionKey: courseKey }, '隐藏失败')
+        setStatus('已保存')
+        window.location.href = `/admin?course=${encodeURIComponent(courseKey)}`
+      } catch (error) {
+        console.error(error)
+        setStatus(error instanceof Error ? error.message : '隐藏失败', true)
+      }
+    })
+  })
+
+  document.querySelectorAll('.course-show-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const courseKey = button.getAttribute('data-course-key') || ''
+      const courseLabel = button.getAttribute('data-course-label') || ''
+      if (!courseKey) return
+
+      const confirmed = window.confirm(`确认显示课程「${courseLabel}」？该课程下所有文章将设为已发布。`)
+      if (!confirmed) return
+
+      try {
+        setStatus('正在保存...')
+        await postCourseAction('/admin/show-course', { sectionKey: courseKey }, '显示失败')
+        setStatus('已保存')
+        window.location.href = `/admin?course=${encodeURIComponent(courseKey)}`
+      } catch (error) {
+        console.error(error)
+        setStatus(error instanceof Error ? error.message : '显示失败', true)
+      }
+    })
+  })
+
+  if (courseList && isAdmin) {
+    installSortableList(courseList, '.admin-course-item', () => ({
+      type: 'courses',
+      order: [...courseList.querySelectorAll('.admin-course-item')].map((item) =>
+        item.getAttribute('data-course-key')
+      )
+    }))
+  }
+
+  document.querySelectorAll('.admin-doc-list').forEach((list) => {
+    installSortableList(list, '.admin-doc-row', () => ({
+      type: 'docs',
+      sectionKey: list.getAttribute('data-section-key'),
+      order: [...list.querySelectorAll('.admin-doc-row')].map((row) => Number(row.getAttribute('data-doc-id')))
+    }))
+  })
+
+  activateCourse(courseList?.getAttribute('data-active-course') || '', false)
+</script>
+
+<style>
+  .admin-shell {
+    display: grid;
+    gap: 1.1rem;
+  }
+
+  @media (min-width: 1024px) {
+    .admin-shell {
+      grid-template-columns: 17.25rem minmax(0, 1fr);
+      align-items: start;
+    }
+  }
+
+  .admin-side {
+    position: sticky;
+    top: 5.6rem;
+    max-height: calc(100vh - 7.2rem);
+    overflow: auto;
+  }
+
+  .admin-course-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .admin-course-item {
+    position: relative;
+    border-radius: 0.95rem;
+    transition: background-color 0.15s ease;
+    cursor: grab;
+  }
+
+  main[data-is-admin='0'] .admin-course-item {
+    cursor: default;
+  }
+
+  .admin-course-item::before {
+    content: '';
+    position: absolute;
+    top: 12%;
+    bottom: 12%;
+    left: 0.1rem;
+    width: 2px;
+    border-radius: 999px;
+    background-color: hsl(var(--input) / var(--un-bg-opacity, 1));
+    transition: background-color 0.15s ease;
+  }
+
+  .admin-course-item.is-active {
+    background-color: hsl(var(--muted) / var(--un-bg-opacity, 1));
+  }
+
+  .admin-course-item.is-active::before {
+    background-color: hsl(var(--primary) / var(--un-bg-opacity, 1));
+  }
+
+  .admin-course-item.is-dragging,
+  .admin-doc-row.is-dragging {
+    opacity: 0.72;
+    transform: scale(0.99);
+  }
+
+  .course-switch {
+    display: block;
+    border-radius: 0.95rem;
+    padding: 0.45rem 0.62rem 0.45rem 0.96rem;
+  }
+
+  .course-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .course-label {
+    font-size: 0.94rem;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+
+  .course-count {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.78rem;
+  }
+
+  .course-meta {
+    display: block;
+    margin-top: 0.1rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.7rem;
+    line-height: 1.45;
+  }
+
+  .admin-doc-row {
+    position: relative;
+    display: grid;
+    gap: 0.65rem;
+    border-radius: 0.9rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background) / 0.88);
+    padding: 0.72rem 0.82rem 0.72rem 1.8rem;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+    cursor: grab;
+  }
+
+  .admin-doc-row:hover {
+    border-color: hsl(var(--primary) / 0.5);
+    background: hsl(var(--muted) / 0.25);
+  }
+
+  @media (min-width: 900px) {
+    .admin-doc-row {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      column-gap: 0.85rem;
+    }
+  }
+
+  .doc-drag-handle {
+    position: absolute;
+    left: 0.6rem;
+    top: 50%;
+    width: 0.62rem;
+    height: 0.62rem;
+    transform: translateY(-50%);
+    color: hsl(var(--muted-foreground));
+    opacity: 0.78;
+  }
+
+  .doc-drag-handle::before {
+    content: '';
+    display: block;
+    width: 100%;
+    height: 100%;
+    background:
+      linear-gradient(currentColor 0 0) 0 0 / 100% 1.5px no-repeat,
+      linear-gradient(currentColor 0 0) 0 50% / 100% 1.5px no-repeat,
+      linear-gradient(currentColor 0 0) 0 100% / 100% 1.5px no-repeat;
+  }
+
+  .admin-doc-row:hover .doc-drag-handle {
+    color: hsl(var(--primary));
+    opacity: 1;
+  }
+
+  .doc-main {
+    min-width: 0;
+  }
+
+  .doc-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.55;
+  }
+
+  .doc-subtitle {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.84rem;
+    line-height: 1.5;
+  }
+
+  .doc-path {
+    margin-top: 0.1rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.72rem;
+    line-height: 1.42;
+  }
+
+  .doc-side {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .doc-meta {
+    border-radius: 999px;
+    border: 1px solid hsl(var(--border));
+    padding: 0.1rem 0.5rem;
+    font-size: 0.72rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .doc-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .admin-side-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+</style>

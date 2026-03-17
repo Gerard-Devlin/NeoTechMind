@@ -1,0 +1,162 @@
+---
+import { basename, extname } from 'node:path'
+
+import PageLayout from '@/layouts/BaseLayout.astro'
+import { getSessionFromCookies } from '@/lib/server/auth.mjs'
+import {
+  getAdminCourseOptions,
+  getContentById,
+  listRecentMedia,
+  registerUploadedMedia,
+  slugifyText
+} from '@/lib/server/content.mjs'
+import '@/assets/styles/admin.css'
+
+interface MediaRecord {
+  id: number
+  content_id: number | null
+  file_path: string
+  original_name: string
+  mime_type: string
+  size_bytes: number
+  section: string
+  section_label: string
+  created_at: string
+  updated_at: string
+}
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+
+const courseOptions = await getAdminCourseOptions(session)
+
+let error = ''
+let successPath = ''
+let selectedCourse = courseOptions[0] || ''
+let linkedContentId = ''
+
+if (Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData()
+  const file = formData.get('file')
+  selectedCourse = String(formData.get('sectionLabel') || '').trim()
+  linkedContentId = String(formData.get('contentId') || '').trim()
+
+  if (!(file instanceof File) || file.size === 0) {
+    error = '请选择要上传的图片。'
+  } else if (!selectedCourse) {
+    error = '请先选择课程。'
+  } else {
+    const sectionKey = slugifyText(selectedCourse) || 'uncategorized'
+
+    const originalName = basename(file.name)
+    const ext = extname(originalName).toLowerCase()
+    const base = originalName.slice(0, Math.max(0, originalName.length - ext.length))
+    const finalName = `${Date.now()}-${slugifyText(base) || 'upload'}${ext || '.png'}`
+    const publicPath = `/uploads/${sectionKey}/${finalName}`
+
+    const buffer = Buffer.from(await file.arrayBuffer())
+
+    const contentId = Number(linkedContentId)
+    let safeContentId: number | null = null
+    if (Number.isFinite(contentId)) {
+      const linked = await getContentById(contentId, session)
+      safeContentId = linked?.id ? Number(linked.id) : null
+    }
+
+    await registerUploadedMedia({
+      contentId: safeContentId,
+      filePath: publicPath,
+      originalName,
+      mimeType: file.type || 'image/*',
+      sizeBytes: file.size,
+      blobData: buffer,
+      section: sectionKey,
+      sectionLabel: selectedCourse,
+      ownerUserId: session.userId
+    })
+
+    successPath = publicPath
+    linkedContentId = safeContentId ? String(safeContentId) : ''
+  }
+}
+
+const files = (await listRecentMedia(40, session)) as MediaRecord[]
+---
+
+<PageLayout
+  meta={{ title: '图片上传', description: 'NeoTechMind media uploads' }}
+  containerClass='max-w-[96rem]'
+>
+  <main class='admin-page py-7 md:py-8'>
+    <section class='admin-card p-7 md:p-8'>
+      <p class='admin-kicker'>Admin</p>
+      <h1 class='admin-title'>图片上传</h1>
+      <p class='admin-desc'>
+        图片和元数据会存入 PostgreSQL，访问路径仍保持为 <code>/uploads/课程/文件名</code>。
+      </p>
+
+      {error && <p class='admin-alert admin-alert-error'>{error}</p>}
+      {successPath && <p class='admin-alert admin-alert-success'>上传成功：<code>{successPath}</code></p>}
+
+      <form class='mt-6 grid gap-4 md:max-w-xl' method='post' enctype='multipart/form-data'>
+        <label class='admin-label'>
+          <span>课程</span>
+          <input
+            class='admin-input'
+            name='sectionLabel'
+            list='course-options'
+            value={selectedCourse}
+            placeholder='例如 Python'
+            required
+          />
+          <datalist id='course-options'>
+            {courseOptions.map((option) => <option value={option} />)}
+          </datalist>
+        </label>
+
+        <label class='admin-label'>
+          <span>关联文章 ID（可选）</span>
+          <input
+            class='admin-input'
+            name='contentId'
+            type='number'
+            value={linkedContentId}
+            placeholder='不关联可留空'
+          />
+        </label>
+
+        <input class='admin-input' name='file' type='file' accept='image/*' required />
+
+        <div class='admin-toolbar'>
+          <button class='admin-btn admin-btn-primary' type='submit'>上传</button>
+          <a class='admin-btn' href='/admin'>返回后台</a>
+        </div>
+      </form>
+    </section>
+
+    <section class='admin-card mt-6 p-7 md:p-8'>
+      <h2 class='text-2xl font-semibold'>最近上传记录</h2>
+
+      {files.length === 0 ? (
+        <p class='mt-4 text-muted-foreground'>暂无媒体记录。</p>
+      ) : (
+        <ul class='admin-list mt-5'>
+          {files.map((file) => (
+            <li class='admin-list-item'>
+              <p class='font-medium'>{file.section_label || 'Uncategorized'}</p>
+              <code class='mt-1 block'>{file.file_path}</code>
+              <p class='mt-2 text-xs text-muted-foreground'>
+                {new Date(file.updated_at).toLocaleString('zh-CN')}
+                {' · '}
+                {Math.round(Number(file.size_bytes || 0) / 1024)} KB
+                {file.content_id ? ` · article #${file.content_id}` : ''}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  </main>
+</PageLayout>

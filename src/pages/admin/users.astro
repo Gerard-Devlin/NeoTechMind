@@ -1,0 +1,218 @@
+---
+import PageLayout from '@/layouts/BaseLayout.astro'
+import {
+  createAdminUser,
+  deleteAdminUser,
+  getSessionFromCookies,
+  isAdminSession,
+  listAdminUsers,
+  setAdminUserActive,
+  updateAdminUserRole
+} from '@/lib/server/auth.mjs'
+import '@/assets/styles/admin.css'
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+
+if (!isAdminSession(session)) {
+  return Astro.redirect('/admin')
+}
+
+let error = ''
+let success = ''
+let username = ''
+let role: 'admin' | 'editor' = 'editor'
+
+if (Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData()
+  const intent = String(formData.get('intent') || '')
+
+  try {
+    if (intent === 'create') {
+      username = String(formData.get('username') || '').trim()
+      const password = String(formData.get('password') || '')
+      role = String(formData.get('role') || 'editor') === 'admin' ? 'admin' : 'editor'
+      await createAdminUser({ username, password, role })
+      success = `用户 ${username} 创建成功。`
+      username = ''
+      role = 'editor'
+    } else if (intent === 'toggle-active') {
+      const targetUserId = Number(formData.get('targetUserId') || 0)
+      const nextActive = String(formData.get('nextActive') || '0') === '1'
+      await setAdminUserActive({
+        targetUserId,
+        active: nextActive,
+        actorUserId: session.userId
+      })
+      success = nextActive ? '用户已解封。' : '用户已封禁。'
+    } else if (intent === 'set-role') {
+      const targetUserId = Number(formData.get('targetUserId') || 0)
+      const nextRole = String(formData.get('role') || 'editor') === 'admin' ? 'admin' : 'editor'
+      await updateAdminUserRole({
+        targetUserId,
+        role: nextRole,
+        actorUserId: session.userId
+      })
+      success = '用户角色已更新。'
+    } else if (intent === 'delete-user') {
+      const targetUserId = Number(formData.get('targetUserId') || 0)
+      await deleteAdminUser({
+        targetUserId,
+        actorUserId: session.userId
+      })
+      success = '用户已删除。'
+    }
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : '操作失败。'
+  }
+}
+
+const users = await listAdminUsers()
+---
+
+<PageLayout meta={{ title: '用户管理', description: 'Manage admin users' }} containerClass='max-w-[96rem]'>
+  <main class='admin-page py-7 md:py-8'>
+    <section class='admin-card p-7 md:p-8'>
+      <p class='admin-kicker'>Admin</p>
+      <h1 class='admin-title'>用户管理</h1>
+      <p class='admin-desc'>管理员可创建用户、封禁/解封账号、调整角色和删除账号。</p>
+
+      {error && <p class='admin-alert admin-alert-error'>{error}</p>}
+      {success && <p class='admin-alert admin-alert-success'>{success}</p>}
+
+      <form class='mt-6 grid gap-4 md:max-w-3xl md:grid-cols-4' method='post'>
+        <input name='intent' type='hidden' value='create' />
+
+        <label class='admin-label md:col-span-1'>
+          <span>用户名</span>
+          <input class='admin-input' name='username' value={username} required />
+        </label>
+
+        <label class='admin-label md:col-span-1'>
+          <span>密码</span>
+          <input class='admin-input' name='password' type='password' minlength='6' required />
+        </label>
+
+        <label class='admin-label md:col-span-1'>
+          <span>角色</span>
+          <select class='admin-input' name='role'>
+            <option value='editor' selected={role === 'editor'}>普通用户</option>
+            <option value='admin' selected={role === 'admin'}>管理员</option>
+          </select>
+        </label>
+
+        <div class='admin-toolbar items-end md:col-span-1'>
+          <button class='admin-btn admin-btn-primary' type='submit'>创建用户</button>
+        </div>
+      </form>
+    </section>
+
+    <section class='admin-card mt-6 p-7 md:p-8'>
+      <div class='mb-4 flex items-center justify-between gap-3'>
+        <h2 class='text-2xl font-semibold'>现有用户</h2>
+        <a class='admin-btn' href='/admin'>返回后台</a>
+      </div>
+
+      <ul class='admin-list'>
+        {
+          users.map((user: any) => {
+            const isCurrent = Number(user.id) === Number(session.userId)
+            const isActive = Boolean(user.is_active)
+
+            return (
+              <li class='admin-list-item'>
+                <div class='flex flex-wrap items-start justify-between gap-3'>
+                  <div>
+                    <p class='font-medium'>
+                      {user.username}
+                      {isCurrent && <span class='ml-2 rounded-full border px-2 py-0.5 text-xs'>当前账号</span>}
+                      {!isActive && <span class='ml-2 rounded-full border border-red-500/60 px-2 py-0.5 text-xs text-red-500'>已封禁</span>}
+                    </p>
+                    <p class='mt-1 text-sm text-muted-foreground'>
+                      角色：{user.role === 'admin' ? '管理员' : '普通用户'}
+                    </p>
+                    <p class='mt-1 text-xs text-muted-foreground'>
+                      创建于：{new Date(user.created_at).toLocaleString('zh-CN')}
+                    </p>
+                  </div>
+
+                  <div class='admin-actions-cluster user-actions-grid'>
+                    <form class='user-role-form' method='post'>
+                      <input name='intent' type='hidden' value='set-role' />
+                      <input name='targetUserId' type='hidden' value={String(user.id)} />
+                      <div class='user-role-controls'>
+                        <select class='user-role-select' name='role' value={user.role}>
+                          <option value='editor'>普通用户</option>
+                          <option value='admin'>管理员</option>
+                        </select>
+                        <button class='admin-btn admin-btn-primary admin-btn-sm user-role-submit' type='submit'>
+                          保存角色
+                        </button>
+                      </div>
+                    </form>
+
+                    <form method='post'>
+                      <input name='intent' type='hidden' value='toggle-active' />
+                      <input name='targetUserId' type='hidden' value={String(user.id)} />
+                      <input name='nextActive' type='hidden' value={isActive ? '0' : '1'} />
+                      <button class='admin-btn admin-btn-sm' type='submit'>
+                        {isActive ? '封禁' : '解封'}
+                      </button>
+                    </form>
+
+                    <form
+                      method='post'
+                      onsubmit={`return confirm('确认删除用户「${user.username}」？该操作不可恢复。')`}
+                    >
+                      <input name='intent' type='hidden' value='delete-user' />
+                      <input name='targetUserId' type='hidden' value={String(user.id)} />
+                      <button class='admin-btn admin-btn-sm admin-btn-danger' type='submit'>删除</button>
+                    </form>
+                  </div>
+                </div>
+              </li>
+            )
+          })
+        }
+      </ul>
+    </section>
+  </main>
+</PageLayout>
+
+<style>
+  .user-role-form {
+    display: inline-flex;
+  }
+
+  .user-role-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 999px;
+    background: hsl(var(--background));
+    padding: 0.22rem;
+  }
+
+  .user-role-select {
+    min-width: 8.2rem;
+    height: 2rem;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    padding: 0 0.78rem;
+    font-size: 0.82rem;
+    line-height: 1.2;
+    outline: none;
+  }
+
+  .user-role-submit {
+    height: 2rem;
+    padding: 0 0.85rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+</style>

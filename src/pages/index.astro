@@ -1,0 +1,116 @@
+---
+import { Image } from 'astro:assets'
+
+import { Quote } from 'astro-pure/advanced'
+import { Icon, Label } from 'astro-pure/user'
+import PageLayout from '@/layouts/BaseLayout.astro'
+import Section from '@/components/home/Section.astro'
+import { getHomepageSnapshot } from '@/lib/server/content.mjs'
+import config from '@/site-config'
+
+const snapshot = await getHomepageSnapshot()
+const sections = snapshot.sections ?? []
+const recentDocs = snapshot.recentDocs ?? []
+const imagePath = config.logo.src
+const images = import.meta.glob<{ default: ImageMetadata }>(
+  '/src/assets/*.{jpeg,jpg,png,gif,avif,webp}'
+)
+
+if (!images[imagePath]) {
+  throw new Error(
+    `"${imagePath}" does not exist in glob: "src/assets/*.{jpeg,jpg,png,gif,avif,webp}"`
+  )
+}
+---
+
+<PageLayout
+  meta={{ title: '首页', description: 'NeoTechMind 课程文档与知识库' }}
+  highlightColor='#659EB9'
+  containerClass='max-w-[88rem]'
+>
+  <main class='flex w-full flex-col items-center'>
+    <section class='animate mb-10 flex flex-col items-center gap-y-7' id='content-header'>
+      <Image
+        src={images[imagePath]()}
+        alt={config.logo.alt || 'Profile'}
+        class='h-28 w-auto rounded-full border p-1'
+        loading='eager'
+        fetchpriority='high'
+      />
+
+      <div class='flex flex-col items-center gap-y-4'>
+        <h1 class='text-3xl font-medium'>{config.author}</h1>
+        <div class='flex flex-wrap justify-center gap-x-7 gap-y-3'>
+          <Label title={`${snapshot.docCount} 篇文档`}>
+            <Icon name='document' class='size-5' slot='icon' />
+          </Label>
+          <Label title={`${sections.length} 门课程`}>
+            <Icon name='list' class='size-5' slot='icon' />
+          </Label>
+        </div>
+      </div>
+
+      <button
+        type='button'
+        aria-disabled='true'
+        class='flex flex-row items-center gap-x-3 rounded-full border bg-background px-4 py-2 text-sm shadow-sm transition-shadow hover:shadow-md'
+      >
+        <span class='relative flex items-center justify-center'>
+          <span
+            class='absolute size-2 animate-ping rounded-full border border-green-400 bg-green-400 opacity-75'
+          ></span>
+          <span class='size-2 rounded-full bg-green-400'></span>
+        </span>
+        <p class='font-medium text-muted-foreground'>进入课程文档</p>
+      </button>
+    </section>
+
+    <div id='content' class='animate flex flex-col gap-y-10 md:w-4/5 lg:w-5/6'>
+      <Section title='站点说明'>
+        <p class='text-muted-foreground'>
+          TechMind 是一个开源学习资源平台，旨在帮助你轻松理解、探索并掌握计算机科学核心概念。从编程语言到深度学习，我们让每个人都能更容易地学习。
+        </p>
+        <button
+          type='button'
+          aria-disabled='true'
+          class='w-fit self-end rounded-full border px-4 py-2 text-sm text-muted-foreground'
+        >
+          浏览课程
+        </button>
+      </Section>
+
+      <Section title='课程导航'>
+        <div class='grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
+          {sections.map((section) => (
+            <a class='rounded-2xl border p-4 transition-colors hover:bg-muted/20' href={section.href}>
+              <p class='text-xl font-semibold'>{section.label}</p>
+              <p class='mt-1 text-sm text-muted-foreground'>{section.count} 篇文章</p>
+              {section.firstDoc?.title && (
+                <p class='mt-2 text-sm text-muted-foreground'>建议从这里开始：{section.firstDoc.title}</p>
+              )}
+            </a>
+          ))}
+        </div>
+      </Section>
+
+      <Section title='最近更新'>
+        <ul class='flex flex-col gap-y-2'>
+          {recentDocs.map((doc) => (
+            <li class='rounded-2xl border bg-muted/15 p-4'>
+              <div class='flex flex-wrap items-center gap-2 text-sm text-muted-foreground'>
+                <span>{doc.section_label}</span>
+                <span>{new Date(doc.updated_at).toLocaleDateString('zh-CN')}</span>
+              </div>
+              <a class='mt-2 block text-lg font-medium hover:underline' href={`/docs/${doc.slug}`}>
+                {doc.title}
+              </a>
+              {doc.subtitle && <p class='mt-1 text-sm text-muted-foreground'>{doc.subtitle}</p>}
+            </li>
+          ))}
+        </ul>
+      </Section>
+    </div>
+
+    <Quote class='mt-12' />
+  </main>
+</PageLayout>

@@ -1,0 +1,8 @@
+---
+import { getDocsIndexData } from '@/lib/server/content.mjs'
+
+const docs = await getDocsIndexData()
+const target = docs.sections?.[0]?.href || '/'
+
+return Astro.redirect(target)
+---

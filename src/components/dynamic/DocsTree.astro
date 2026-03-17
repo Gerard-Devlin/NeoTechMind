@@ -1,0 +1,232 @@
+---
+interface TreeNode {
+  label: string
+  key: string
+  children: TreeNode[]
+  item: {
+    slug: string
+    subtitle?: string | null
+  } | null
+}
+
+interface Props {
+  tree: TreeNode[]
+  currentPath?: string
+  currentSlug?: string
+  title?: string
+}
+
+const { tree, currentPath = '', currentSlug = '', title = 'Course contents' } = Astro.props
+
+function normalizePathname(pathname: string) {
+  const normalized = String(pathname || '/')
+    .trim()
+    .split('?')[0]
+    .split('#')[0]
+  if (!normalized || normalized === '/') return '/'
+  return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized
+}
+
+const normalizedCurrentPath = normalizePathname(currentPath)
+const normalizedCurrentSlug = String(currentSlug || '')
+  .trim()
+  .replace(/^\/+|\/+$/g, '')
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+function renderNodes(nodes: TreeNode[], depth = 1): string {
+  const listClass = depth === 1 ? 'bb-docs-list is-root' : 'bb-docs-list'
+  return `<ul class="${listClass}">${nodes
+    .map((node) => {
+      const label = escapeHtml(node.label)
+      const children = node.children.length ? renderNodes(node.children, depth + 1) : ''
+
+      if (!node.item) {
+        const groupClass = depth === 1 ? 'bb-docs-group is-root-group' : 'bb-docs-group'
+        return `<li class="bb-docs-node is-group"><p class="${groupClass}">${label}</p>${children}</li>`
+      }
+
+      const href = `/docs/${node.item.slug}`
+      const subtitle = node.item.subtitle
+        ? `<small class="bb-docs-subtitle">${escapeHtml(node.item.subtitle)}</small>`
+        : ''
+      const slug = String(node.item.slug || '')
+        .trim()
+        .replace(/^\/+|\/+$/g, '')
+      const isActive = slug === normalizedCurrentSlug || normalizePathname(href) === normalizedCurrentPath
+      const activeClass = isActive ? ' docs-hl' : ''
+
+      return `<li class="bb-docs-node is-item"><a class="docs-item${activeClass}" data-doc-link data-doc-slug="${escapeHtml(
+        slug
+      )}" href="${href}"${isActive ? ' aria-current="page"' : ''}><span class="bb-docs-title">${label}</span>${subtitle}</a>${children}</li>`
+    })
+    .join('')}</ul>`
+}
+---
+
+<docs-tree-nav class='bb-docs-tree not-prose'>
+  <h2 class='bb-docs-title-main'>{title}</h2>
+  <Fragment set:html={renderNodes(tree)} />
+</docs-tree-nav>
+
+<style>
+  :global(.bb-docs-tree .bb-docs-title-main) {
+    font-size: 1rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+    line-height: 1.55;
+  }
+
+  :global(.bb-docs-tree .bb-docs-list) {
+    margin-top: 0.35rem;
+    margin-left: 0;
+    padding-left: 0;
+    list-style: none;
+  }
+
+  :global(.bb-docs-tree .bb-docs-list .bb-docs-list) {
+    margin-top: 0.2rem;
+    margin-left: 0.85rem;
+  }
+
+  :global(.bb-docs-tree .bb-docs-node.is-group + .bb-docs-node.is-group) {
+    margin-top: 0.9rem;
+  }
+
+  :global(.bb-docs-tree .bb-docs-group) {
+    margin: 0.3rem 0.25rem 0.1rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.95rem;
+    line-height: 1.7;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  :global(.bb-docs-tree .bb-docs-group.is-root-group) {
+    margin-top: 0.65rem;
+  }
+
+  :global(.bb-docs-tree .docs-item) {
+    position: relative;
+    display: block;
+    margin-left: 0.5rem;
+    border-radius: 0.95rem;
+    padding: 0.25rem 0.7rem 0.25rem 1.25rem;
+    color: hsl(var(--foreground) / 0.75);
+    text-decoration: none;
+    transition: all 0.15s ease;
+    line-height: 1.75;
+  }
+
+  :global(.bb-docs-tree .docs-item::before) {
+    content: '';
+    position: absolute;
+    top: 8%;
+    bottom: 8%;
+    left: -0.5rem;
+    width: 2px;
+    border-radius: 999px;
+    background-color: hsl(var(--input) / var(--un-bg-opacity, 1));
+    transition: background-color 0.15s ease;
+  }
+
+  :global(.bb-docs-tree .docs-item:hover) {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--muted) / var(--un-bg-opacity, 1));
+  }
+
+  :global(.bb-docs-tree .docs-item.docs-hl) {
+    font-weight: 500;
+    color: hsl(var(--primary));
+    background-color: hsl(var(--primary) / 0.16);
+  }
+
+  :global(.bb-docs-tree .docs-item.docs-hl::before) {
+    background-color: hsl(var(--primary) / var(--un-bg-opacity, 1));
+  }
+
+  :global(.bb-docs-tree .bb-docs-title) {
+    display: block;
+    font-size: 1rem;
+    line-height: 1.7;
+  }
+
+  :global(.bb-docs-tree .bb-docs-subtitle) {
+    display: block;
+    margin-top: -0.1rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.84rem;
+    line-height: 1.45;
+    font-weight: 500;
+  }
+
+  :global(.bb-docs-tree .bb-docs-node.is-item + .bb-docs-node.is-item) {
+    margin-top: 0.05rem;
+  }
+  :global(.bb-docs-tree .bb-docs-node.is-group + .bb-docs-node.is-item) {
+    margin-top: 0.1rem;
+  }
+</style>
+
+<script>
+  const normalizePathname = (pathname = '/') => {
+    const normalized = String(pathname).trim().split('?')[0].split('#')[0]
+    if (!normalized || normalized === '/') return '/'
+    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized
+  }
+
+  const normalizeSlug = (value = '') =>
+    String(value)
+      .trim()
+      .replace(/^\/+|\/+$/g, '')
+
+  const getCurrentDocSlug = (pathname = '/') => {
+    const normalized = normalizePathname(pathname)
+    const docsPrefix = '/docs/'
+    if (!normalized.startsWith(docsPrefix)) return ''
+    const raw = normalized.slice(docsPrefix.length)
+    try {
+      return normalizeSlug(decodeURIComponent(raw))
+    } catch {
+      return normalizeSlug(raw)
+    }
+  }
+
+  class DocsTree extends HTMLElement {
+    applyActiveState = () => {
+      const currentSlug = getCurrentDocSlug(window.location.pathname)
+      const current = normalizePathname(window.location.pathname)
+      const links = this.querySelectorAll('a[data-doc-link]')
+      links.forEach((link) => {
+        const linkSlug = normalizeSlug(link.getAttribute('data-doc-slug') || '')
+        const href = normalizePathname(link.getAttribute('href') || '')
+        const isActive = (currentSlug && linkSlug === currentSlug) || href === current
+        link.classList.toggle('docs-hl', isActive)
+        if (isActive) {
+          link.setAttribute('aria-current', 'page')
+        } else {
+          link.removeAttribute('aria-current')
+        }
+      })
+    }
+
+    connectedCallback() {
+      this.applyActiveState()
+      document.addEventListener('astro:page-load', this.applyActiveState)
+    }
+
+    disconnectedCallback() {
+      document.removeEventListener('astro:page-load', this.applyActiveState)
+    }
+  }
+
+  if (!customElements.get('docs-tree-nav')) {
+    customElements.define('docs-tree-nav', DocsTree)
+  }
+</script>
