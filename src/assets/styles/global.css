@@ -73,6 +73,13 @@ span.katex-display {
   padding: 0.2rem 0;
 }
 
+/* [Markdown table] */
+#content.prose table,
+.bb-markdown.prose table {
+  margin-inline: auto;
+  width: max-content;
+}
+
 /* [Shiki basic] */
 .astro-code {
   margin-top: 0.5rem;
