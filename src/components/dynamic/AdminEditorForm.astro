@@ -152,13 +152,18 @@ function formatDateTimeLocal(value?: string | null) {
       <div class='mb-2 flex flex-wrap items-center gap-2'>
         <span class='text-sm font-medium'>正文 Markdown</span>
         <button
-          id='editor-upload-trigger'
+          id='editor-import-md-trigger'
           class='rounded-full border px-3 py-1 text-xs hover:bg-muted/40'
           type='button'
         >
-          上传图片并插入
+          导入 Markdown
         </button>
-        <input id='editor-upload-input' class='hidden' type='file' accept='image/*' />
+        <input
+          id='editor-import-md-input'
+          class='hidden'
+          type='file'
+          accept='.md,.mdx,text/markdown,text/plain'
+        />
         <span id='editor-upload-status' class='text-xs text-muted-foreground' aria-live='polite'></span>
         <span id='editor-preview-status' class='text-xs text-muted-foreground' aria-live='polite'></span>
       </div>
@@ -199,8 +204,8 @@ function formatDateTimeLocal(value?: string | null) {
 
     const textarea = root.querySelector('textarea[name="content"]')
     const sectionInput = root.querySelector('input[name="sectionLabel"]')
-    const trigger = document.getElementById('editor-upload-trigger')
-    const fileInput = document.getElementById('editor-upload-input')
+    const importMdTrigger = document.getElementById('editor-import-md-trigger')
+    const importMdInput = document.getElementById('editor-import-md-input')
     const statusNode = document.getElementById('editor-upload-status')
     const previewStatusNode = document.getElementById('editor-preview-status')
     const previewHost = document.getElementById('editor-live-preview')
@@ -210,8 +215,8 @@ function formatDateTimeLocal(value?: string | null) {
     if (
       !(textarea instanceof HTMLTextAreaElement) ||
       !(sectionInput instanceof HTMLInputElement) ||
-      !(trigger instanceof HTMLButtonElement) ||
-      !(fileInput instanceof HTMLInputElement)
+      !(importMdTrigger instanceof HTMLButtonElement) ||
+      !(importMdInput instanceof HTMLInputElement)
     ) {
       return
     }
@@ -269,12 +274,570 @@ function formatDateTimeLocal(value?: string | null) {
       textarea.focus()
     }
 
-    const uploadSelectedFile = async (file: File) => {
+    const isMarkdownFile = (file: File) => {
+      const name = String(file.name || '').toLowerCase()
+      const type = String(file.type || '').toLowerCase()
+      return (
+        name.endsWith('.md') ||
+        name.endsWith('.mdx') ||
+        type === 'text/markdown' ||
+        type === 'text/x-markdown' ||
+        type === 'text/plain'
+      )
+    }
+
+    const normalizeMarkdownText = (text: string) =>
+      String(text || '')
+        .replace(/^\uFEFF/, '')
+        .replace(/\r\n/g, '\n')
+
+    const countMatches = (text: string, pattern: RegExp) => {
+      const matched = text.match(pattern)
+      return matched ? matched.length : 0
+    }
+
+    const scoreReadableChineseText = (text: string) => {
+      const cjkCount = countMatches(text, /[\u3400-\u9fff]/g)
+      const replacementCount = countMatches(text, /\uFFFD/g)
+      const latinMojibakeHintCount = countMatches(text, /[ÃÂÐÑÊËÅÆØ]/g)
+      const commonMojibakeHintCount = countMatches(text, /[锛銆鈥鏄鍙涓璇姝闂绗妯鎺鎴浣]/g)
+      return cjkCount - replacementCount * 60 - latinMojibakeHintCount * 12 - commonMojibakeHintCount * 3
+    }
+
+    const decodeMarkdownFile = async (file: File) => {
+      const rawBytes = new Uint8Array(await file.arrayBuffer())
+      const utf8 = normalizeMarkdownText(new TextDecoder('utf-8').decode(rawBytes))
+      let gb18030 = ''
+
+      try {
+        gb18030 = normalizeMarkdownText(new TextDecoder('gb18030').decode(rawBytes))
+      } catch {
+        gb18030 = ''
+      }
+
+      if (!gb18030) return utf8
+      return scoreReadableChineseText(gb18030) > scoreReadableChineseText(utf8) + 8 ? gb18030 : utf8
+    }
+
+    const IMAGE_EXTENSIONS = new Set([
+      '.apng',
+      '.avif',
+      '.bmp',
+      '.gif',
+      '.ico',
+      '.jpeg',
+      '.jpg',
+      '.png',
+      '.svg',
+      '.tif',
+      '.tiff',
+      '.webp'
+    ])
+
+    const getFileExtension = (name: string) => {
+      const normalized = String(name || '').trim()
+      const lastDot = normalized.lastIndexOf('.')
+      if (lastDot < 0) return ''
+      return normalized.slice(lastDot).toLowerCase()
+    }
+
+    const isImageFile = (file: File) => {
+      const type = String(file.type || '').toLowerCase()
+      if (type.startsWith('image/')) return true
+      return IMAGE_EXTENSIONS.has(getFileExtension(file.name))
+    }
+
+    const safeDecodeUri = (value: string) => {
+      try {
+        return decodeURI(value)
+      } catch {
+        return value
+      }
+    }
+
+    const stripUrlSuffix = (value: string) => String(value || '').replace(/[?#].*$/, '')
+
+    const parseMarkdownTarget = (target: string) => {
+      const trimmed = String(target || '').trim()
+      if (!trimmed) return { url: '', rest: '' }
+
+      if (trimmed.startsWith('<')) {
+        const close = trimmed.indexOf('>')
+        if (close > 1) {
+          return {
+            url: trimmed.slice(1, close).trim(),
+            rest: trimmed.slice(close + 1)
+          }
+        }
+      }
+
+      const firstSpace = trimmed.search(/\s/)
+      if (firstSpace > 0) {
+        return {
+          url: trimmed.slice(0, firstSpace).trim(),
+          rest: trimmed.slice(firstSpace)
+        }
+      }
+
+      return { url: trimmed, rest: '' }
+    }
+
+    const normalizePathKey = (value: string) =>
+      safeDecodeUri(stripUrlSuffix(String(value || '').trim()))
+        .replace(/\\/g, '/')
+        .replace(/^\.\//, '')
+        .replace(/^\/+/, '')
+        .toLowerCase()
+
+    const compactPathKey = (value: string) => {
+      const normalized = normalizePathKey(value)
+      if (!normalized) return ''
+      const parts = normalized.split('/')
+      const stack: string[] = []
+
+      for (const part of parts) {
+        if (!part || part === '.') continue
+        if (part === '..') {
+          if (stack.length > 0) stack.pop()
+          continue
+        }
+        stack.push(part)
+      }
+
+      return stack.join('/')
+    }
+
+    const joinPathKey = (baseDir: string, relativePath: string) => {
+      const base = normalizePathKey(baseDir)
+      const relative = normalizePathKey(relativePath)
+      if (!relative) return ''
+      if (!base) return compactPathKey(relative)
+      return compactPathKey(`${base}/${relative}`)
+    }
+
+    const basenamePath = (value: string) => {
+      const normalized = normalizePathKey(value)
+      const index = normalized.lastIndexOf('/')
+      return index >= 0 ? normalized.slice(index + 1) : normalized
+    }
+
+    const isRemotePath = (value: string) =>
+      /^(https?:)?\/\//i.test(value) ||
+      value.startsWith('data:') ||
+      value.startsWith('blob:') ||
+      value.startsWith('mailto:')
+
+    const isLocalImageReference = (value: string) => {
+      const trimmed = String(value || '').trim()
+      if (!trimmed) return false
+      if (isRemotePath(trimmed)) return false
+      if (trimmed.startsWith('/uploads/') || trimmed.startsWith('/imports/techmind/')) return false
+      if (trimmed.startsWith('#')) return false
+      return true
+    }
+
+    const findClosingBracket = (value: string, start: number) => {
+      for (let index = Math.max(0, start); index < value.length; index += 1) {
+        const current = value[index]
+        if (current === '\\') {
+          index += 1
+          continue
+        }
+        if (current === ']') return index
+      }
+      return -1
+    }
+
+    const findClosingParen = (value: string, start: number) => {
+      let depth = 1
+      for (let index = Math.max(0, start); index < value.length; index += 1) {
+        const current = value[index]
+        if (current === '\\') {
+          index += 1
+          continue
+        }
+        if (current === '(') {
+          depth += 1
+          continue
+        }
+        if (current === ')') {
+          depth -= 1
+          if (depth === 0) return index
+        }
+      }
+      return -1
+    }
+
+    const normalizeReferenceLabel = (value: string) =>
+      String(value || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+
+    const extractInlineImageReferences = (content: string) => {
+      const refs: Array<{ rawTarget: string; url: string }> = []
+      let cursor = 0
+
+      while (cursor < content.length) {
+        const marker = content.indexOf('![', cursor)
+        if (marker < 0) break
+
+        const labelEnd = findClosingBracket(content, marker + 2)
+        if (labelEnd < 0) break
+        if (content[labelEnd + 1] !== '(') {
+          cursor = labelEnd + 1
+          continue
+        }
+
+        const targetStart = labelEnd + 2
+        const targetEnd = findClosingParen(content, targetStart)
+        if (targetEnd < 0) {
+          cursor = targetStart
+          continue
+        }
+
+        const rawTarget = String(content.slice(targetStart, targetEnd) || '').trim()
+        if (!rawTarget) {
+          cursor = targetEnd + 1
+          continue
+        }
+
+        const { url } = parseMarkdownTarget(rawTarget)
+        if (url) {
+          refs.push({ rawTarget, url: url.trim() })
+        }
+
+        cursor = targetEnd + 1
+      }
+
+      return refs
+    }
+
+    const extractReferenceImageReferences = (content: string) => {
+      const refs: Array<{ rawTarget: string; url: string }> = []
+      const definitions = new Map<string, string>()
+      const definitionPattern = /^\s{0,3}\[([^\]]+)\]:\s*(.+)$/gm
+      let definitionMatch: RegExpExecArray | null = null
+
+      while (true) {
+        definitionMatch = definitionPattern.exec(content)
+        if (!definitionMatch) break
+        const key = normalizeReferenceLabel(definitionMatch[1] || '')
+        const target = String(definitionMatch[2] || '').trim()
+        if (!key || !target) continue
+        definitions.set(key, target)
+      }
+
+      const withExplicitLabel = /!\[([^\]]*)]\[([^\]]*)]/g
+      let imageMatch: RegExpExecArray | null = null
+      while (true) {
+        imageMatch = withExplicitLabel.exec(content)
+        if (!imageMatch) break
+
+        const fallbackLabel = String(imageMatch[1] || '').trim()
+        const explicitLabel = String(imageMatch[2] || '').trim()
+        const key = normalizeReferenceLabel(explicitLabel || fallbackLabel)
+        const rawTarget = definitions.get(key)
+        if (!rawTarget) continue
+
+        const { url } = parseMarkdownTarget(rawTarget)
+        if (url) refs.push({ rawTarget, url })
+      }
+
+      const shortcutPattern = /!\[([^\]]+)](?!\()/g
+      let shortcutMatch: RegExpExecArray | null = null
+      while (true) {
+        shortcutMatch = shortcutPattern.exec(content)
+        if (!shortcutMatch) break
+
+        const key = normalizeReferenceLabel(shortcutMatch[1] || '')
+        const rawTarget = definitions.get(key)
+        if (!rawTarget) continue
+
+        const { url } = parseMarkdownTarget(rawTarget)
+        if (url) refs.push({ rawTarget, url })
+      }
+
+      return refs
+    }
+
+    const extractHtmlImageReferences = (content: string) => {
+      const refs: Array<{ rawTarget: string; url: string }> = []
+      const tagPattern = /<img\b[^>]*>/gi
+      let tagMatch: RegExpExecArray | null = null
+
+      while (true) {
+        tagMatch = tagPattern.exec(content)
+        if (!tagMatch) break
+
+        const tag = String(tagMatch[0] || '')
+        const srcMatch = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)
+        if (!srcMatch) continue
+
+        const url = String(srcMatch[1] || srcMatch[2] || srcMatch[3] || '').trim()
+        if (!url) continue
+        refs.push({ rawTarget: url, url })
+      }
+
+      return refs
+    }
+
+    const extractMarkdownImageReferences = (content: string) => {
+      const refs = [
+        ...extractInlineImageReferences(content),
+        ...extractReferenceImageReferences(content),
+        ...extractHtmlImageReferences(content)
+      ]
+      return refs.filter((item) => Boolean(item.url))
+    }
+
+    const buildDroppedImageLookup = (files: File[]) => {
+      const byPath = new Map<string, File>()
+      const byName = new Map<string, File>()
+
+      files.forEach((file) => {
+        if (!isImageFile(file)) return
+        const extended = file as File & { webkitRelativePath?: string }
+        const relPath = typeof extended.webkitRelativePath === 'string' ? extended.webkitRelativePath : ''
+        const relKey = normalizePathKey(relPath)
+        const nameKey = normalizePathKey(file.name)
+
+        if (relKey) byPath.set(relKey, file)
+        if (nameKey) byPath.set(nameKey, file)
+
+        const base = basenamePath(nameKey)
+        if (base && !byName.has(base)) {
+          byName.set(base, file)
+        }
+      })
+
+      return { byPath, byName }
+    }
+
+    type PickerHandle = {
+      kind?: 'file' | 'directory'
+      getFile?: () => Promise<File>
+      entries?: () => AsyncIterableIterator<[string, PickerHandle]>
+      queryPermission?: (descriptor?: { mode?: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>
+      requestPermission?: (
+        descriptor?: { mode?: 'read' | 'readwrite' }
+      ) => Promise<'granted' | 'denied' | 'prompt'>
+    }
+
+    type PickerWindow = Window & {
+      showDirectoryPicker?: (options?: { startIn?: PickerHandle; mode?: 'read' | 'readwrite' }) => Promise<PickerHandle>
+    }
+
+    const mergeImageLookup = (
+      base: { byPath: Map<string, File>; byName: Map<string, File> },
+      extra: { byPath: Map<string, File>; byName: Map<string, File> }
+    ) => {
+      const mergedByPath = new Map(base.byPath)
+      const mergedByName = new Map(base.byName)
+      for (const [key, file] of extra.byPath.entries()) {
+        if (!mergedByPath.has(key)) mergedByPath.set(key, file)
+      }
+      for (const [key, file] of extra.byName.entries()) {
+        if (!mergedByName.has(key)) mergedByName.set(key, file)
+      }
+      return { byPath: mergedByPath, byName: mergedByName }
+    }
+
+    let rememberedDirectoryHandle: PickerHandle | null = null
+    let rememberedDirectoryLookup: { byPath: Map<string, File>; byName: Map<string, File> } | null = null
+
+    const ensureDirectoryReadPermission = async (handle: PickerHandle) => {
+      if (!handle) return false
+      if (typeof handle.queryPermission !== 'function' && typeof handle.requestPermission !== 'function') {
+        return true
+      }
+
+      try {
+        const current =
+          typeof handle.queryPermission === 'function'
+            ? await handle.queryPermission({ mode: 'read' })
+            : 'prompt'
+        if (current === 'granted') return true
+        if (current === 'denied') return false
+
+        if (typeof handle.requestPermission === 'function') {
+          const requested = await handle.requestPermission({ mode: 'read' })
+          return requested === 'granted'
+        }
+      } catch {
+        return false
+      }
+
+      return false
+    }
+
+    const scanDirectoryImageLookup = async (directoryHandle: PickerHandle, scanningMessage: string) => {
+      if (!directoryHandle) return null
+
+      const allowed = await ensureDirectoryReadPermission(directoryHandle)
+      if (!allowed) return null
+
+      try {
+        setStatus(scanningMessage)
+        const files: File[] = []
+        const walkDirectory = async (dir: PickerHandle, prefix = '') => {
+          const entries = dir.entries?.()
+          if (!entries) return
+
+          for await (const [name, handle] of entries) {
+            const relPath = prefix ? `${prefix}/${name}` : name
+            if (handle.kind === 'directory') {
+              await walkDirectory(handle, relPath)
+              continue
+            }
+
+            if (handle.kind === 'file' && typeof handle.getFile === 'function') {
+              const file = await handle.getFile().catch(() => null)
+              if (!file || !isImageFile(file)) continue
+              try {
+                Object.defineProperty(file, 'webkitRelativePath', {
+                  value: relPath,
+                  configurable: true
+                })
+              } catch {}
+              files.push(file)
+            }
+          }
+        }
+
+        await walkDirectory(directoryHandle)
+        return buildDroppedImageLookup(files)
+      } catch {
+        return null
+      }
+    }
+
+    const loadRememberedDirectoryLookup = async () => {
+      if (!rememberedDirectoryHandle) return null
+      if (rememberedDirectoryLookup) return rememberedDirectoryLookup
+
+      const lookup = await scanDirectoryImageLookup(rememberedDirectoryHandle, '正在复用已授权目录扫描图片...')
+      if (!lookup) {
+        rememberedDirectoryHandle = null
+        rememberedDirectoryLookup = null
+        return null
+      }
+
+      rememberedDirectoryLookup = lookup
+      return lookup
+    }
+
+    const pickDirectoryImageLookup = async () => {
+      const pickerWindow = window as PickerWindow
+      if (typeof pickerWindow.showDirectoryPicker !== 'function') {
+        return null
+      }
+
+      try {
+        setStatus('检测到本地图片路径，请选择文档根目录...')
+        const directoryHandle = await pickerWindow.showDirectoryPicker({
+          mode: 'read',
+          startIn: rememberedDirectoryHandle || undefined
+        })
+        if (!directoryHandle) return null
+
+        const lookup = await scanDirectoryImageLookup(directoryHandle, '正在扫描目录中的图片...')
+        if (!lookup) return null
+
+        rememberedDirectoryHandle = directoryHandle
+        rememberedDirectoryLookup = lookup
+        return lookup
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return null
+        }
+        return null
+      }
+    }
+
+    const resolveLocalImageFile = (
+      reference: string,
+      lookup: { byPath: Map<string, File>; byName: Map<string, File> },
+      markdownDir = ''
+    ) => {
+      const refKey = normalizePathKey(reference)
+      if (!refKey) return null
+
+      const noLeadingDots = refKey.replace(/^(\.\.\/)+/, '')
+      const compactRef = compactPathKey(refKey)
+      const resolvedFromMarkdown = markdownDir ? joinPathKey(markdownDir, refKey) : ''
+
+      const candidates = [
+        refKey,
+        noLeadingDots,
+        compactRef,
+        resolvedFromMarkdown
+      ].filter(Boolean)
+
+      for (const candidate of candidates) {
+        const byPath = lookup.byPath.get(candidate)
+        if (byPath) return byPath
+      }
+
+      for (const candidate of candidates) {
+        const suffix = `/${candidate}`
+        for (const [pathKey, file] of lookup.byPath.entries()) {
+          if (pathKey.endsWith(suffix)) {
+            return file
+          }
+        }
+      }
+
+      const base = basenamePath(refKey)
+      return lookup.byName.get(base) || null
+    }
+
+    const hasResolvableLocalRef = (
+      references: string[],
+      lookup: { byPath: Map<string, File>; byName: Map<string, File> },
+      markdownDir = ''
+    ) => references.some((ref) => Boolean(resolveLocalImageFile(ref, lookup, markdownDir)))
+
+    const buildReplacementKeys = (reference: string, markdownDir = '') => {
+      const refKey = normalizePathKey(reference)
+      if (!refKey) return []
+
+      const noLeadingDots = refKey.replace(/^(\.\.\/)+/, '')
+      const compactRef = compactPathKey(refKey)
+      const resolvedFromMarkdown = markdownDir ? joinPathKey(markdownDir, refKey) : ''
+      const base = basenamePath(refKey)
+
+      return [...new Set([refKey, noLeadingDots, compactRef, resolvedFromMarkdown, base].filter(Boolean))]
+    }
+
+    const resolveReplacementPath = (url: string, replacements: Map<string, string>) => {
+      const key = normalizePathKey(url)
+      if (!key) return ''
+
+      const noLeadingDots = key.replace(/^(\.\.\/)+/, '')
+      const compactKey = compactPathKey(key)
+      const base = basenamePath(key)
+      const candidates = [key, noLeadingDots, compactKey, base]
+
+      for (const candidate of candidates) {
+        const hit = replacements.get(candidate)
+        if (hit) return hit
+      }
+
+      for (const [candidate, targetPath] of replacements.entries()) {
+        if (!candidate) continue
+        if (key.endsWith(`/${candidate}`) || candidate.endsWith(`/${key}`)) {
+          return targetPath
+        }
+      }
+
+      return ''
+    }
+
+    const uploadImageFile = async (file: File) => {
       const sectionLabel = sectionInput.value.trim()
       if (!sectionLabel) {
-        setStatus('请先填写课程名。', true)
-        sectionInput.focus()
-        return
+        throw new Error('Please fill in the course name first.')
       }
 
       const formData = new FormData()
@@ -284,29 +847,216 @@ function formatDateTimeLocal(value?: string | null) {
         formData.append('contentId', contentId)
       }
 
-      trigger.disabled = true
+      const response = await fetch(uploadEndpoint, {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin'
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok || !payload?.ok || !payload?.path) {
+        throw new Error(payload?.message || 'Upload failed, please try again later.')
+      }
+
+      return String(payload.path)
+    }
+
+    const replaceInlineImageTargets = (content: string, replacements: Map<string, string>) => {
+      let result = ''
+      let cursor = 0
+
+      while (cursor < content.length) {
+        const marker = content.indexOf('![', cursor)
+        if (marker < 0) break
+
+        result += content.slice(cursor, marker)
+
+        const labelEnd = findClosingBracket(content, marker + 2)
+        if (labelEnd < 0 || content[labelEnd + 1] !== '(') {
+          result += content.slice(marker, marker + 2)
+          cursor = marker + 2
+          continue
+        }
+
+        const targetStart = labelEnd + 2
+        const targetEnd = findClosingParen(content, targetStart)
+        if (targetEnd < 0) {
+          result += content.slice(marker, targetStart)
+          cursor = targetStart
+          continue
+        }
+
+        const rawTarget = String(content.slice(targetStart, targetEnd) || '').trim()
+        const { url, rest } = parseMarkdownTarget(rawTarget)
+        const next = resolveReplacementPath(url, replacements)
+        const imageChunk = content.slice(marker, targetEnd + 1)
+        if (!next) {
+          result += imageChunk
+          cursor = targetEnd + 1
+          continue
+        }
+
+        result += content.slice(marker, targetStart)
+        result += `${next}${rest}`
+        result += ')'
+        cursor = targetEnd + 1
+      }
+
+      result += content.slice(cursor)
+      return result
+    }
+
+    const replaceReferenceDefinitionTargets = (content: string, replacements: Map<string, string>) =>
+      content.replace(/^(\s{0,3}\[[^\]]+]\:\s*)(.+)$/gm, (full, prefix, rawTarget) => {
+        const target = String(rawTarget || '').trim()
+        if (!target) return full
+
+        const { url, rest } = parseMarkdownTarget(target)
+        const next = resolveReplacementPath(url, replacements)
+        if (!next) return full
+
+        const wrappedUrl = target.startsWith('<') ? `<${next}>` : next
+        return `${prefix}${wrappedUrl}${rest}`
+      })
+
+    const replaceHtmlImageTargets = (content: string, replacements: Map<string, string>) =>
+      content.replace(/<img\b[^>]*>/gi, (tag) =>
+        tag.replace(
+          /(\bsrc\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i,
+          (full, prefix, doubleQuoted, singleQuoted, bare) => {
+            const current = String(doubleQuoted || singleQuoted || bare || '')
+            const next = resolveReplacementPath(current, replacements)
+            if (!next) return full
+
+            if (typeof doubleQuoted === 'string') {
+              return `${prefix}"${next}"`
+            }
+            if (typeof singleQuoted === 'string') {
+              return `${prefix}'${next}'`
+            }
+            return `${prefix}${next}`
+          }
+        )
+      )
+
+    const replaceImageTargets = (content: string, replacements: Map<string, string>) => {
+      let next = replaceInlineImageTargets(content, replacements)
+      next = replaceReferenceDefinitionTargets(next, replacements)
+      next = replaceHtmlImageTargets(next, replacements)
+      return next
+    }
+
+    const importMarkdownFile = async (file: File, droppedFiles: File[] = []) => {
+      if (!isMarkdownFile(file)) {
+        throw new Error('Only .md/.mdx files are supported.')
+      }
+
+      if (file.size > 3 * 1024 * 1024) {
+        throw new Error('Markdown file is too large (max 3MB).')
+      }
+
+      let content = await decodeMarkdownFile(file)
+      if (!content.trim()) {
+        throw new Error('Markdown file is empty.')
+      }
+
+      const markdownRelPath = normalizePathKey(
+        String((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name || '')
+      )
+      const markdownDir =
+        markdownRelPath.lastIndexOf('/') > 0
+          ? markdownRelPath.slice(0, markdownRelPath.lastIndexOf('/'))
+          : ''
+
+      const references = extractMarkdownImageReferences(content)
+      const localRefs = references
+        .map((item) => item.url)
+        .filter((url) => isLocalImageReference(url))
+      const uniqueLocalRefs = [...new Set(localRefs.map((item) => normalizePathKey(item)))]
+
+      if (uniqueLocalRefs.length > 0) {
+        let lookup = buildDroppedImageLookup(droppedFiles)
+        const hasDroppedLookup = lookup.byPath.size > 0 || lookup.byName.size > 0
+
+        if (!hasDroppedLookup) {
+          const rememberedLookup = await loadRememberedDirectoryLookup()
+          if (rememberedLookup) {
+            lookup = mergeImageLookup(lookup, rememberedLookup)
+          }
+        }
+
+        if (!hasResolvableLocalRef(uniqueLocalRefs, lookup, markdownDir)) {
+          const pickedLookup = await pickDirectoryImageLookup()
+          if (pickedLookup) {
+            lookup = mergeImageLookup(lookup, pickedLookup)
+          }
+        }
+        const replacements = new Map<string, string>()
+        const unresolved: string[] = []
+        const uploadErrors: string[] = []
+
+        for (const ref of uniqueLocalRefs) {
+          const fileRef = resolveLocalImageFile(ref, lookup, markdownDir)
+          if (!fileRef) {
+            unresolved.push(ref)
+            continue
+          }
+          if (replacements.has(ref)) continue
+
+          try {
+            setStatus(`Uploading local image: ${fileRef.name}`)
+            const path = await uploadImageFile(fileRef)
+            const keySet = buildReplacementKeys(ref, markdownDir)
+            if (!keySet.length) keySet.push(ref)
+            keySet.forEach((key) => {
+              if (!replacements.has(key)) {
+                replacements.set(key, path)
+              }
+            })
+          } catch (error) {
+            unresolved.push(ref)
+            const message = error instanceof Error ? error.message : 'Upload failed.'
+            uploadErrors.push(`${fileRef.name}: ${message}`)
+          }
+        }
+
+        if (replacements.size > 0) {
+          content = replaceImageTargets(content, replacements)
+        }
+
+        if (unresolved.length > 0) {
+          const summary = uploadErrors.length
+            ? ` ${uploadErrors.length} upload(s) failed. ${uploadErrors[0]}`
+            : ''
+          setStatus(
+            `Imported Markdown, but ${unresolved.length} local image path(s) were not resolved.${summary}`,
+            true
+          )
+        }
+      }
+
+      const existing = String(textarea.value || '').trim()
+      if (existing && existing !== content.trim()) {
+        const shouldReplace = window.confirm('Replace current content with this Markdown file?')
+        if (!shouldReplace) return false
+      }
+
+      textarea.value = content
+      textarea.setSelectionRange(0, 0)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      textarea.focus()
+      return true
+    }
+
+    const uploadSelectedFile = async (file: File) => {
       setStatus('正在上传...')
 
       try {
-        const response = await fetch(uploadEndpoint, {
-          method: 'POST',
-          body: formData,
-          credentials: 'same-origin'
-        })
-        const payload = await response.json().catch(() => null)
-
-        if (!response.ok || !payload?.ok || !payload?.path) {
-          throw new Error(payload?.message || '上传失败，请稍后重试。')
-        }
-
-        insertMarkdown(`![${toAltText(file.name)}](${payload.path})`)
-        setStatus(`已插入 ${payload.path}`)
+        const path = await uploadImageFile(file)
+        insertMarkdown(`![${toAltText(file.name)}](${path})`)
+        setStatus(`已插入 ${path}`)
       } catch (error) {
         const message = error instanceof Error ? error.message : '上传失败，请稍后重试。'
         setStatus(message, true)
-      } finally {
-        trigger.disabled = false
-        fileInput.value = ''
       }
     }
 
@@ -332,19 +1082,170 @@ function formatDateTimeLocal(value?: string | null) {
     let previewAppliedId = 0
     let lockEditorScrollSync = false
     let lockPreviewScrollSync = false
+    let editorLineOffsets: number[] = [0]
+    let lineMeasureHost: HTMLDivElement | null = null
+    let lineResizeObserver: ResizeObserver | null = null
 
-    const syncScrollByRatio = (source: HTMLElement, target: HTMLElement) => {
-      const sourceRange = Math.max(1, source.scrollHeight - source.clientHeight)
-      const targetRange = Math.max(1, target.scrollHeight - target.clientHeight)
-      const ratio = source.scrollTop / sourceRange
-      target.scrollTop = ratio * targetRange
+    const ensureLineMeasureHost = () => {
+      if (lineMeasureHost) return lineMeasureHost
+
+      const host = document.createElement('div')
+      host.setAttribute('aria-hidden', 'true')
+      host.style.position = 'fixed'
+      host.style.top = '-99999px'
+      host.style.left = '-99999px'
+      host.style.visibility = 'hidden'
+      host.style.pointerEvents = 'none'
+      host.style.whiteSpace = 'pre-wrap'
+      host.style.wordBreak = 'break-word'
+      host.style.overflowWrap = 'break-word'
+      document.body.append(host)
+      lineMeasureHost = host
+      return host
+    }
+
+    const syncLineMeasureStyle = () => {
+      const host = ensureLineMeasureHost()
+      const style = window.getComputedStyle(textarea)
+      host.style.boxSizing = 'border-box'
+      host.style.width = `${textarea.clientWidth}px`
+      host.style.padding = style.padding
+      host.style.border = style.border
+      host.style.font = style.font
+      host.style.lineHeight = style.lineHeight
+      host.style.letterSpacing = style.letterSpacing
+      host.style.tabSize = style.tabSize
+      host.style.textIndent = style.textIndent
+      host.style.textTransform = style.textTransform
+      host.style.wordSpacing = style.wordSpacing
+    }
+
+    const rebuildEditorLineOffsets = () => {
+      const host = ensureLineMeasureHost()
+      syncLineMeasureStyle()
+      host.replaceChildren()
+
+      const lines = String(textarea.value || '').split('\n')
+      const nextOffsets: number[] = []
+
+      lines.forEach((line) => {
+        const marker = document.createElement('div')
+        marker.textContent = line.length > 0 ? line : ' '
+        host.append(marker)
+        nextOffsets.push(marker.offsetTop)
+      })
+
+      editorLineOffsets = nextOffsets.length > 0 ? nextOffsets : [0]
+    }
+
+    const getEditorTopLine = () => {
+      if (!editorLineOffsets.length) {
+        rebuildEditorLineOffsets()
+      }
+
+      const target = Math.max(0, textarea.scrollTop + 1)
+      let left = 0
+      let right = editorLineOffsets.length - 1
+      let matched = 0
+
+      while (left <= right) {
+        const middle = Math.floor((left + right) / 2)
+        const offset = editorLineOffsets[middle] || 0
+
+        if (offset <= target) {
+          matched = middle
+          left = middle + 1
+        } else {
+          right = middle - 1
+        }
+      }
+
+      return matched + 1
+    }
+
+    const getEditorScrollTopForLine = (line: number) => {
+      if (!editorLineOffsets.length) {
+        rebuildEditorLineOffsets()
+      }
+
+      const safeLine = Math.max(1, Math.min(editorLineOffsets.length, Number(line) || 1))
+      return Math.max(0, editorLineOffsets[safeLine - 1] || 0)
+    }
+
+    const getElementTopInside = (container: HTMLElement, element: HTMLElement) => {
+      const containerRect = container.getBoundingClientRect()
+      const elementRect = element.getBoundingClientRect()
+      return elementRect.top - containerRect.top + container.scrollTop
+    }
+
+    const getPreviewAnchors = () => {
+      if (!(previewMarkdown instanceof HTMLElement)) return []
+
+      return [...previewMarkdown.querySelectorAll('[data-source-line]')]
+        .filter((node): node is HTMLElement => node instanceof HTMLElement)
+        .map((element) => ({
+          element,
+          line: Number(element.getAttribute('data-source-line') || '0')
+        }))
+        .filter((item) => Number.isFinite(item.line) && item.line > 0)
+    }
+
+    const findPreviewAnchorByLine = (sourceLine: number) => {
+      const anchors = getPreviewAnchors()
+      if (anchors.length === 0) return null
+
+      let left = 0
+      let right = anchors.length - 1
+      let matched = anchors[0]
+
+      while (left <= right) {
+        const middle = Math.floor((left + right) / 2)
+        const current = anchors[middle]
+
+        if (current.line <= sourceLine) {
+          matched = current
+          left = middle + 1
+        } else {
+          right = middle - 1
+        }
+      }
+
+      return matched
+    }
+
+    const findTopPreviewAnchor = () => {
+      if (!(previewHost instanceof HTMLElement)) return null
+      const anchors = getPreviewAnchors()
+      if (anchors.length === 0) return null
+
+      const targetTop = previewHost.scrollTop + 8
+      let matched = anchors[0]
+      let matchedTop = Number.NEGATIVE_INFINITY
+
+      for (const anchor of anchors) {
+        const top = getElementTopInside(previewHost, anchor.element)
+        if (top <= targetTop && top > matchedTop) {
+          matched = anchor
+          matchedTop = top
+        }
+        if (top > targetTop && matchedTop !== Number.NEGATIVE_INFINITY) {
+          break
+        }
+      }
+
+      return matched
     }
 
     const syncFromEditor = () => {
       if (!(previewHost instanceof HTMLElement)) return
       if (lockPreviewScrollSync) return
+
+      const anchor = findPreviewAnchorByLine(getEditorTopLine())
+      if (!anchor) return
+
       lockEditorScrollSync = true
-      syncScrollByRatio(textarea, previewHost)
+      const nextTop = Math.max(0, getElementTopInside(previewHost, anchor.element) - 12)
+      previewHost.scrollTop = nextTop
       requestAnimationFrame(() => {
         lockEditorScrollSync = false
       })
@@ -353,8 +1254,12 @@ function formatDateTimeLocal(value?: string | null) {
     const syncFromPreview = () => {
       if (!(previewHost instanceof HTMLElement)) return
       if (lockEditorScrollSync) return
+
+      const anchor = findTopPreviewAnchor()
+      if (!anchor) return
+
       lockPreviewScrollSync = true
-      syncScrollByRatio(previewHost, textarea)
+      textarea.scrollTop = getEditorScrollTopForLine(anchor.line)
       requestAnimationFrame(() => {
         lockPreviewScrollSync = false
       })
@@ -381,7 +1286,7 @@ function formatDateTimeLocal(value?: string | null) {
 
         const payload = await response.json().catch(() => null)
         if (!response.ok || !payload?.ok) {
-          throw new Error(payload?.message || '预览渲染失败。')
+          throw new Error(payload?.message || 'Preview render failed.')
         }
 
         if (currentId < previewAppliedId) return
@@ -390,7 +1295,7 @@ function formatDateTimeLocal(value?: string | null) {
         setPreviewStatus('')
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        const message = error instanceof Error ? error.message : '预览渲染失败。'
+        const message = error instanceof Error ? error.message : 'Preview render failed.'
         setPreviewStatus(message, true)
       }
     }
@@ -402,17 +1307,37 @@ function formatDateTimeLocal(value?: string | null) {
       }, 280)
     }
 
-    trigger.addEventListener('click', () => {
-      fileInput.click()
+    importMdTrigger.addEventListener('click', () => {
+      importMdInput.click()
     })
 
-    fileInput.addEventListener('change', async () => {
-      const file = fileInput.files?.[0]
+    importMdInput.addEventListener('change', async () => {
+      const file = importMdInput.files?.[0]
       if (!file) return
-      await uploadSelectedFile(file)
+      if (!isMarkdownFile(file)) {
+        setStatus('Please choose a .md or .mdx file.', true)
+        importMdInput.value = ''
+        return
+      }
+
+      try {
+        setStatus('Importing Markdown...')
+        const imported = await importMarkdownFile(file)
+        if (imported) {
+          setStatus(`Imported ${file.name}`)
+        } else {
+          setStatus('Import cancelled.')
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Markdown import failed.'
+        setStatus(message, true)
+      } finally {
+        importMdInput.value = ''
+      }
     })
 
     textarea.addEventListener('input', () => {
+      rebuildEditorLineOffsets()
       schedulePreview()
     })
     textarea.addEventListener('scroll', () => {
@@ -435,28 +1360,181 @@ function formatDateTimeLocal(value?: string | null) {
       }
     })
 
-    textarea.addEventListener('dragover', (event) => {
-      const transfer = event.dataTransfer
-      if (!transfer) return
-      const hasImage = Array.from(transfer.items || []).some(
-        (item) => item.kind === 'file' && item.type.startsWith('image/')
-      )
-      if (!hasImage) return
-      event.preventDefault()
-      transfer.dropEffect = 'copy'
-    })
+    const hasFileInTransfer = (transfer: DataTransfer) =>
+      Array.from(transfer.items || []).some((item) => item.kind === 'file')
 
-    textarea.addEventListener('drop', async (event) => {
-      const transfer = event.dataTransfer
-      if (!transfer) return
-      const files = Array.from(transfer.files || []).filter((file) => file.type.startsWith('image/'))
-      if (files.length === 0) return
-
-      event.preventDefault()
-      for (const file of files) {
-        await uploadSelectedFile(file)
+    type TransferEntry = {
+      isFile?: boolean
+      isDirectory?: boolean
+      fullPath?: string
+      file?: (success: (file: File) => void, error?: (error: unknown) => void) => void
+      createReader?: () => {
+        readEntries: (success: (entries: TransferEntry[]) => void, error?: (error: unknown) => void) => void
       }
-    })
+    }
+
+    type TransferItemWithEntry = DataTransferItem & {
+      webkitGetAsEntry?: () => TransferEntry | null
+    }
+
+    const makeFileKey = (file: File) => `${file.name}::${file.size}::${file.lastModified}`
+
+    const patchFileRelativePath = (file: File, fullPath: string) => {
+      const cleanPath = String(fullPath || '').replace(/^\/+/, '')
+      if (!cleanPath) return file
+      try {
+        Object.defineProperty(file, 'webkitRelativePath', {
+          value: cleanPath,
+          configurable: true
+        })
+      } catch {}
+      return file
+    }
+
+    const readEntryFile = (entry: TransferEntry) =>
+      new Promise<File | null>((resolve) => {
+        if (!entry?.file) {
+          resolve(null)
+          return
+        }
+
+        entry.file(
+          (file) => {
+            resolve(patchFileRelativePath(file, entry.fullPath || ''))
+          },
+          () => resolve(null)
+        )
+      })
+
+    const readDirectoryEntries = (entry: TransferEntry) =>
+      new Promise<TransferEntry[]>((resolve) => {
+        const reader = entry.createReader?.()
+        if (!reader) {
+          resolve([])
+          return
+        }
+
+        const allEntries: TransferEntry[] = []
+        const readNext = () => {
+          reader.readEntries(
+            (batch) => {
+              if (!batch.length) {
+                resolve(allEntries)
+                return
+              }
+              allEntries.push(...batch)
+              readNext()
+            },
+            () => resolve(allEntries)
+          )
+        }
+        readNext()
+      })
+
+    const walkTransferEntry = async (entry: TransferEntry): Promise<File[]> => {
+      if (entry.isFile) {
+        const file = await readEntryFile(entry)
+        return file ? [file] : []
+      }
+
+      if (entry.isDirectory) {
+        const files: File[] = []
+        const children = await readDirectoryEntries(entry)
+        for (const child of children) {
+          const nested = await walkTransferEntry(child)
+          files.push(...nested)
+        }
+        return files
+      }
+
+      return []
+    }
+
+    const extractFilesFromTransfer = async (transfer: DataTransfer) => {
+      const directFiles = Array.from(transfer.files || [])
+      const itemEntries = Array.from(transfer.items || [])
+        .map((item) => {
+          const withEntry = item as TransferItemWithEntry
+          return typeof withEntry.webkitGetAsEntry === 'function' ? withEntry.webkitGetAsEntry() : null
+        })
+        .filter((entry) => Boolean(entry)) as TransferEntry[]
+
+      if (!itemEntries.length) return directFiles
+
+      const result = [...directFiles]
+      const seen = new Set(result.map((file) => makeFileKey(file)))
+
+      for (const entry of itemEntries) {
+        const nestedFiles = await walkTransferEntry(entry)
+        for (const file of nestedFiles) {
+          const key = makeFileKey(file)
+          if (seen.has(key)) continue
+          seen.add(key)
+          result.push(file)
+        }
+      }
+
+      return result
+    }
+
+    const handleDroppedFiles = async (files: File[]) => {
+      if (!files.length) return
+
+      const markdownFiles = files.filter((file) => isMarkdownFile(file))
+      const imageFiles = files.filter((file) => isImageFile(file))
+
+      if (markdownFiles.length > 0) {
+        try {
+          const imported = await importMarkdownFile(markdownFiles[0], files)
+          if (imported) {
+            setStatus(`Imported ${markdownFiles[0].name}`)
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Markdown import failed.'
+          setStatus(message, true)
+        }
+        return
+      }
+
+      if (imageFiles.length > 0) {
+        for (const file of imageFiles) {
+          await uploadSelectedFile(file)
+        }
+      }
+    }
+
+    const bindFileDropTarget = (target: HTMLElement) => {
+      target.addEventListener('dragover', (event) => {
+        const transfer = event.dataTransfer
+        if (!transfer || !hasFileInTransfer(transfer)) return
+        event.preventDefault()
+        transfer.dropEffect = 'copy'
+      })
+
+      target.addEventListener('drop', async (event) => {
+        const transfer = event.dataTransfer
+        if (!transfer) return
+        const files = await extractFilesFromTransfer(transfer)
+        if (files.length === 0) return
+
+        event.preventDefault()
+        await handleDroppedFiles(files)
+      })
+    }
+
+    bindFileDropTarget(textarea)
+    if (previewHost instanceof HTMLElement) {
+      bindFileDropTarget(previewHost)
+    }
+
+    if ('ResizeObserver' in window) {
+      lineResizeObserver = new ResizeObserver(() => {
+        rebuildEditorLineOffsets()
+      })
+      lineResizeObserver.observe(textarea)
+    }
+
+    rebuildEditorLineOffsets()
 
     void renderPreview(textarea.value || '')
   })()
@@ -492,3 +1570,4 @@ function formatDateTimeLocal(value?: string | null) {
     }
   }
 </style>
+

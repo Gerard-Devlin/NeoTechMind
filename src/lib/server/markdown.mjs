@@ -190,10 +190,26 @@ function preprocessMathBlocks(source) {
 
   flushPendingMath(true)
 
-  return output
+  return normalizeDollarMathDelimiters(
+    output
     .join('\n')
     .replace(/\\\[((?:.|\n)*?)\\\]/g, (_, formula) => `$$\n${formula.trim()}\n$$`)
     .replace(/\\\(((?:\\.|[^\\)])*?)\\\)/g, (_, formula) => `$${formula.trim()}$`)
+  )
+}
+
+function normalizeDollarMathDelimiters(source) {
+  return String(source || '')
+    .replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
+      const normalized = String(formula || '').trim()
+      if (!normalized) return ''
+      return `$$\n${normalized}\n$$`
+    })
+    .replace(/(^|[^\\$])\$(?!\$)([^$\n]*?)\$(?!\$)/gm, (_full, prefix, formula) => {
+      const normalized = String(formula || '').trim()
+      if (!normalized) return prefix
+      return `${prefix}$${normalized}$`
+    })
 }
 
 function buildInlineToc(headings) {
@@ -303,6 +319,19 @@ async function highlightCodeBlock(content, rawInfo) {
   }
 }
 
+function getTokenSourceLine(token) {
+  if (!Array.isArray(token?.map)) return null
+  const line = Number(token.map[0]) + 1
+  return Number.isFinite(line) && line > 0 ? line : null
+}
+
+function setTokenSourceLineAttr(token) {
+  const line = getTokenSourceLine(token)
+  if (!line) return null
+  token.attrSet('data-source-line', String(line))
+  return line
+}
+
 function createMarkdownEngine(codeBlocks) {
   const md = new MarkdownIt({
     html: true,
@@ -324,9 +353,31 @@ function createMarkdownEngine(codeBlocks) {
   md.use(markdownItKatex)
   md.use(markdownItTaskLists, { enabled: true, label: true, labelAfter: true })
 
+  const blockTokenTypes = [
+    'paragraph_open',
+    'heading_open',
+    'blockquote_open',
+    'bullet_list_open',
+    'ordered_list_open',
+    'table_open',
+    'hr',
+    'code_block'
+  ]
+
+  blockTokenTypes.forEach((type) => {
+    const fallbackRule =
+      md.renderer.rules[type] ||
+      ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options))
+
+    md.renderer.rules[type] = (tokens, index, options, env, self) => {
+      setTokenSourceLineAttr(tokens[index])
+      return fallbackRule(tokens, index, options, env, self)
+    }
+  })
+
   const defaultImageRenderer =
     md.renderer.rules.image ||
-    ((tokens, index, options, env, self) => self.renderToken(tokens, index, options))
+    ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options))
 
   md.renderer.rules.image = (tokens, index, options, env, self) => {
     const token = tokens[index]
@@ -348,14 +399,16 @@ function createMarkdownEngine(codeBlocks) {
     const token = tokens[index]
     const info = (token.info || '').trim()
     const language = normalizeLanguage(info)
+    const sourceLine = getTokenSourceLine(token)
+    const sourceAttr = sourceLine ? ` data-source-line="${sourceLine}"` : ''
 
     if (language === 'mermaid') {
-      return `<div class="mermaid">${escapeHtml(token.content.trim())}</div>`
+      return `<div class="mermaid"${sourceAttr}>${escapeHtml(token.content.trim())}</div>`
     }
 
     const placeholder = `<!--BB_CODE_BLOCK_${codeBlocks.length}-->`
     codeBlocks.push(highlightCodeBlock(token.content, info))
-    return placeholder
+    return `<div class="bb-code-block"${sourceAttr}>${placeholder}</div>`
   }
 
   return md

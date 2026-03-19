@@ -5,6 +5,27 @@ import type { APIRoute } from 'astro'
 import { getSessionFromCookies } from '@/lib/server/auth.mjs'
 import { getContentById, registerUploadedMedia, slugifyText } from '@/lib/server/content.mjs'
 
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  '.apng': 'image/apng',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.webp': 'image/webp'
+}
+
+function resolveImageMimeType(file: File) {
+  if (file.type && file.type.startsWith('image/')) return file.type
+  const ext = extname(String(file.name || '')).toLowerCase()
+  return IMAGE_MIME_BY_EXT[ext] || ''
+}
+
 function json(data: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -35,7 +56,8 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     return json({ ok: false, message: 'Course name is required.' }, 400)
   }
 
-  if (file.type && !file.type.startsWith('image/')) {
+  const resolvedMimeType = resolveImageMimeType(file)
+  if (!resolvedMimeType) {
     return json({ ok: false, message: 'Only image uploads are supported.' }, 400)
   }
 
@@ -62,7 +84,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
       contentId: safeContentId,
       filePath: publicPath,
       originalName,
-      mimeType: file.type || 'image/*',
+      mimeType: resolvedMimeType,
       sizeBytes: file.size,
       blobData: buffer,
       section: sectionKey,

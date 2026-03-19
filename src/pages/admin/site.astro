@@ -1,0 +1,67 @@
+---
+import PageLayout from '@/layouts/BaseLayout.astro'
+import { getSessionFromCookies, isAdminSession } from '@/lib/server/auth.mjs'
+import { getHomepageDescription, updateHomepageDescription } from '@/lib/server/content.mjs'
+import '@/assets/styles/admin.css'
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+if (!isAdminSession(session)) {
+  return Astro.redirect('/admin')
+}
+
+let error = ''
+let success = ''
+let homepageDescription = await getHomepageDescription()
+
+if (Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData()
+  const nextDescription = String(formData.get('homepageDescription') || '')
+
+  try {
+    homepageDescription = await updateHomepageDescription(nextDescription, session)
+    success = '站点说明已更新'
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : '保存失败'
+  }
+}
+---
+
+<PageLayout meta={{ title: '站点设置', description: 'Manage homepage settings' }} containerClass='max-w-[70rem]'>
+  <main class='admin-page py-7 md:py-8'>
+    <section class='admin-top'>
+      <div>
+        <p class='admin-kicker'>Admin</p>
+        <h1 class='admin-title'>站点设置</h1>
+        <p class='admin-desc'>仅管理员可修改首页站点说明。</p>
+      </div>
+      <div class='admin-toolbar'>
+        <a class='admin-btn' href='/admin'>返回后台</a>
+      </div>
+    </section>
+
+    {error && <p class='admin-alert admin-alert-error'>{error}</p>}
+    {success && <p class='admin-alert admin-alert-success'>{success}</p>}
+
+    <section class='admin-card mt-6 p-5 md:p-6'>
+      <form class='flex flex-col gap-4' method='post'>
+        <label class='admin-label'>
+          <span>首页站点说明</span>
+          <textarea
+            class='admin-input'
+            name='homepageDescription'
+            rows='6'
+            maxlength='3000'
+            required
+          >{homepageDescription}</textarea>
+        </label>
+        <div class='admin-toolbar'>
+          <button class='admin-btn admin-btn-primary' type='submit'>保存设置</button>
+          <a class='admin-btn' href='/'>查看首页</a>
+        </div>
+      </form>
+    </section>
+  </main>
+</PageLayout>

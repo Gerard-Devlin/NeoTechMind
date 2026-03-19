@@ -59,8 +59,17 @@ const items = [
 
     <div class='z-30 flex gap-x-4 group-[.not-top]:gap-x-2' style='transition:gap 0.3s'>
       <button
+        id='toggleSearch'
+        class='rounded-md border p-1.5 transition-colors hover:bg-border sm:group-[.not-top]:rounded-xl'
+        type='button'
+      >
+        <span class='sr-only'>Search</span>
+        <Icon class='size-5' name='search' />
+      </button>
+      <button
         id='toggleDarkMode'
         class='group/dark box-content size-5 rounded-md border p-1.5 transition-colors hover:bg-border sm:group-[.not-top]:rounded-xl'
+        type='button'
       >
         <span class='sr-only'>Dark Theme</span>
         <Icon class='system size-5 group-hover/dark:text-primary' name='computer' />
@@ -70,11 +79,33 @@ const items = [
       <button
         id='toggleMenu'
         class='rounded-md border p-1.5 transition-colors hover:bg-border sm:hidden sm:group-[.not-top]:rounded-xl'
+        type='button'
       >
         <span class='sr-only'>Menu</span>
         <Icon class='size-5' name='menu' />
       </button>
     </div>
+  </div>
+
+  <div id='headerSearchOverlay' class='search-overlay' hidden>
+    <button type='button' class='search-backdrop' data-search-close aria-label='Close search'></button>
+    <section class='search-panel' role='dialog' aria-modal='true' aria-labelledby='site-search-title'>
+      <h2 id='site-search-title' class='sr-only'>站内搜索</h2>
+      <div class='search-input-row'>
+        <Icon class='search-input-icon size-5' name='search' />
+        <input
+          id='siteSearchInput'
+          class='search-input'
+          type='search'
+          placeholder='搜索课程和文档...'
+          autocomplete='off'
+          spellcheck='false'
+        />
+        <kbd class='search-kbd'>Esc</kbd>
+      </div>
+      <p id='siteSearchHint' class='search-hint'>输入关键词后将实时显示结果</p>
+      <ul id='siteSearchResults' class='search-results' aria-live='polite'></ul>
+    </section>
   </div>
 </header-component>
 
@@ -86,18 +117,22 @@ const items = [
 </script>
 
 <script>
+  // @ts-nocheck
   import { setTheme, showToast } from 'astro-pure/utils'
 
   class HeaderComponent extends HTMLElement {
+    cleanup = null
+
     connectedCallback() {
       let preScrollY = window.scrollY
       this.classList.toggle('not-top', preScrollY > 20)
 
-      window.addEventListener('scroll', () => {
+      const onWindowScroll = () => {
         this.classList.toggle('not-top', window.scrollY > 20)
         this.dataset.show = (window.scrollY < 350 || window.scrollY < preScrollY).toString()
         preScrollY = window.scrollY
-      })
+      }
+      window.addEventListener('scroll', onWindowScroll)
 
       const darkModeButton = this.querySelector('#toggleDarkMode')
       darkModeButton?.addEventListener('click', () => {
@@ -111,10 +146,168 @@ const items = [
       this.querySelector('#toggleMenu')?.addEventListener('click', () => {
         this.classList.toggle('expanded')
       })
+
+      const searchButton = this.querySelector('#toggleSearch')
+      const searchOverlay = this.querySelector('#headerSearchOverlay')
+      const searchInput = this.querySelector('#siteSearchInput')
+      const searchHint = this.querySelector('#siteSearchHint')
+      const searchResults = this.querySelector('#siteSearchResults')
+      const closeButtons = this.querySelectorAll('[data-search-close]')
+
+      let searchTimer = 0
+      let searchController = null
+      let searchRequestId = 0
+      let searchAppliedId = 0
+
+      const clearResults = () => {
+        if (!(searchResults instanceof HTMLElement)) return
+        searchResults.replaceChildren()
+      }
+
+      const setHint = (message) => {
+        if (!(searchHint instanceof HTMLElement)) return
+        searchHint.textContent = message
+      }
+
+      const closeSearch = () => {
+        if (!(searchOverlay instanceof HTMLElement)) return
+        searchOverlay.hidden = true
+        document.body.style.overflow = ''
+      }
+
+      const openSearch = () => {
+        if (!(searchOverlay instanceof HTMLElement)) return
+        searchOverlay.hidden = false
+        document.body.style.overflow = 'hidden'
+        window.setTimeout(() => {
+          if (searchInput instanceof HTMLInputElement) searchInput.focus()
+        }, 20)
+      }
+
+      const renderResults = (results) => {
+        if (!(searchResults instanceof HTMLElement)) return
+        searchResults.replaceChildren()
+
+        if (!Array.isArray(results) || results.length === 0) {
+          setHint('没有匹配结果')
+          return
+        }
+
+        setHint(`找到 ${results.length} 条结果`)
+
+        results.forEach((result) => {
+          const item = document.createElement('li')
+          item.className = 'search-result-li'
+
+          const link = document.createElement('a')
+          link.className = 'search-result-item'
+          link.href = String(result.url || '#')
+
+          const titleRow = document.createElement('div')
+          titleRow.className = 'search-result-title-row'
+
+          const title = document.createElement('p')
+          title.className = 'search-result-title'
+          title.textContent = String(result.title || 'Untitled')
+
+          const badge = document.createElement('span')
+          badge.className = 'search-result-badge'
+          badge.textContent = String(result.sectionLabel || result.type || 'Doc')
+
+          titleRow.append(title, badge)
+
+          const snippet = document.createElement('p')
+          snippet.className = 'search-result-snippet'
+          snippet.textContent = String(result.snippet || result.summary || '')
+
+          const time = document.createElement('p')
+          time.className = 'search-result-time'
+          const date = new Date(String(result.updatedAt || ''))
+          time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('zh-CN')
+
+          link.append(titleRow, snippet, time)
+          link.addEventListener('click', () => closeSearch())
+          item.append(link)
+          searchResults.append(item)
+        })
+      }
+
+      const searchNow = async (query) => {
+        const keyword = String(query || '').trim()
+        if (!keyword) {
+          clearResults()
+          setHint('输入关键词后将实时显示结果')
+          return
+        }
+
+        searchRequestId += 1
+        const currentId = searchRequestId
+        searchController?.abort()
+        searchController = new AbortController()
+        setHint('搜索中...')
+
+        try {
+          const response = await fetch(`/api/search?q=${encodeURIComponent(keyword)}&limit=12`, {
+            signal: searchController.signal
+          })
+          const payload = await response.json().catch(() => null)
+          if (!response.ok || !payload?.ok) {
+            throw new Error(payload?.message || '搜索失败')
+          }
+          if (currentId < searchAppliedId) return
+          searchAppliedId = currentId
+          renderResults(payload.results || [])
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') return
+          clearResults()
+          setHint(error instanceof Error ? error.message : '搜索失败')
+        }
+      }
+
+      searchButton?.addEventListener('click', () => openSearch())
+      closeButtons.forEach((button) => {
+        button.addEventListener('click', () => closeSearch())
+      })
+
+      if (searchInput instanceof HTMLInputElement) {
+        searchInput.addEventListener('input', () => {
+          if (searchTimer) window.clearTimeout(searchTimer)
+          searchTimer = window.setTimeout(() => {
+            void searchNow(searchInput.value)
+          }, 180)
+        })
+      }
+
+      const onGlobalKeydown = (event) => {
+        const isShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k'
+        if (isShortcut) {
+          event.preventDefault()
+          openSearch()
+          return
+        }
+
+        if (event.key === 'Escape' && searchOverlay instanceof HTMLElement && !searchOverlay.hidden) {
+          closeSearch()
+        }
+      }
+      document.addEventListener('keydown', onGlobalKeydown)
+
+      this.cleanup = () => {
+        window.removeEventListener('scroll', onWindowScroll)
+        document.removeEventListener('keydown', onGlobalKeydown)
+      }
+    }
+
+    disconnectedCallback() {
+      if (typeof this.cleanup === 'function') {
+        this.cleanup()
+      }
     }
   }
 
-  customElements.define('header-component', HeaderComponent)
+  if (!customElements.get('header-component')) {
+    customElements.define('header-component', HeaderComponent)
+  }
 </script>
 
 <style>
@@ -153,6 +346,152 @@ const items = [
 
   :global(.dark) header-component.not-top {
     background-color: hsl(var(--muted) / var(--un-bg-opacity));
+  }
+
+  .search-overlay[hidden] {
+    display: none;
+  }
+
+  .search-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 120;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .search-backdrop {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    background: rgb(2 4 8 / 0.58);
+    backdrop-filter: blur(3px);
+  }
+
+  .search-panel {
+    position: relative;
+    z-index: 1;
+    width: min(46rem, 100%);
+    max-height: min(78vh, 40rem);
+    border-radius: 1.25rem;
+    border: 1px solid hsl(var(--border) / 0.8);
+    background: hsl(var(--background) / 0.94);
+    box-shadow:
+      0 22px 48px rgb(0 0 0 / 0.35),
+      0 1px 0 rgb(255 255 255 / 0.04) inset;
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .search-input-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.5rem;
+    border-radius: 0.9rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--muted) / 0.35);
+    padding: 0.62rem 0.72rem;
+  }
+
+  .search-input-icon {
+    color: hsl(var(--muted-foreground));
+  }
+
+  .search-input {
+    width: 100%;
+    border: 0;
+    outline: 0;
+    font-size: 1rem;
+    background: transparent;
+    color: hsl(var(--foreground));
+  }
+
+  .search-input::placeholder {
+    color: hsl(var(--muted-foreground));
+  }
+
+  .search-kbd {
+    border-radius: 0.45rem;
+    border: 1px solid hsl(var(--border));
+    padding: 0.1rem 0.4rem;
+    font-size: 0.72rem;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--background));
+  }
+
+  .search-hint {
+    padding: 0 0.2rem;
+    font-size: 0.84rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .search-results {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .search-result-li {
+    margin: 0;
+  }
+
+  .search-result-item {
+    display: block;
+    border-radius: 0.92rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--muted) / 0.2);
+    padding: 0.65rem 0.72rem;
+    text-decoration: none;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+  }
+
+  .search-result-item:hover {
+    border-color: hsl(var(--primary) / 0.5);
+    background: hsl(var(--muted) / 0.38);
+  }
+
+  .search-result-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.4rem;
+  }
+
+  .search-result-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .search-result-badge {
+    border-radius: 999px;
+    border: 1px solid hsl(var(--border));
+    padding: 0 0.45rem;
+    font-size: 0.7rem;
+    color: hsl(var(--muted-foreground));
+    line-height: 1.55;
+  }
+
+  .search-result-snippet {
+    margin-top: 0.18rem;
+    font-size: 0.8rem;
+    color: hsl(var(--muted-foreground));
+    line-height: 1.45;
+  }
+
+  .search-result-time {
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    color: hsl(var(--muted-foreground));
   }
 
   @media (max-width: 640px) {

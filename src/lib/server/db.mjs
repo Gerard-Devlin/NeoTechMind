@@ -155,6 +155,12 @@ async function initializePostgres() {
     CREATE INDEX IF NOT EXISTS idx_course_sections_sort_order
       ON course_sections(sort_order);
 
+    CREATE TABLE IF NOT EXISTS site_settings (
+      setting_key TEXT PRIMARY KEY,
+      setting_value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS content_media (
       id BIGSERIAL PRIMARY KEY,
       content_id BIGINT REFERENCES content_items(id) ON DELETE CASCADE,

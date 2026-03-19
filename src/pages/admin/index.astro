@@ -42,6 +42,7 @@ function buildNewDocHref(courseLabel = '') {
 
       <div class='admin-toolbar'>
         <a class='admin-btn admin-btn-primary' href='/admin/new'>新建文章</a>
+        {isAdmin && <a class='admin-btn' href='/admin/site'>站点设置</a>}
         {isAdmin && <a class='admin-btn' href='/admin/users'>用户管理</a>}
         <a class='admin-btn' href='/admin/uploads'>上传图片</a>
         <a class='admin-btn' href='/admin/logout'>退出登录</a>

@@ -14,6 +14,9 @@ import {
 const SECTION_ORDER = ['C', 'Python', 'DSA', 'DLD', 'DBS', 'COA', 'ML&DL']
 const textCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
 let sectionCleanupPromise = null
+const HOMEPAGE_DESCRIPTION_KEY = 'homepage_description'
+const HOMEPAGE_DESCRIPTION_DEFAULT =
+  'NeoTechMind 是一个开源学习资源平台，旨在帮助你轻松理解、探索并掌握计算机科学核心概念。从编程语言到深度学习，我们让每个人都能更容易地学习。'
 
 function normalizeUserId(value) {
   const parsed = Number(value)
@@ -568,9 +571,63 @@ export function buildSummary(content, fallback = '') {
   return text.slice(0, 180)
 }
 
+function normalizeSearchQuery(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+function buildSearchSnippet(content, query) {
+  const plain = stripMarkdown(content)
+  if (!plain) return ''
+
+  const normalizedQuery = normalizeSearchQuery(query)
+  if (!normalizedQuery) return plain.slice(0, 160)
+
+  const haystack = plain.toLowerCase()
+  const needle = normalizedQuery.toLowerCase()
+  const hitIndex = haystack.indexOf(needle)
+
+  if (hitIndex < 0) return plain.slice(0, 160)
+
+  const lead = Math.max(0, hitIndex - 56)
+  const tail = Math.min(plain.length, hitIndex + normalizedQuery.length + 92)
+  const prefix = lead > 0 ? '...' : ''
+  const suffix = tail < plain.length ? '...' : ''
+  return `${prefix}${plain.slice(lead, tail)}${suffix}`
+}
+
 function countRowValue(row) {
   const value = row?.count ?? row?.COUNT ?? row?.total ?? 0
   return Number(value || 0)
+}
+
+async function getSiteSettingValue(settingKey) {
+  const row = await dbGet(
+    `SELECT setting_value
+     FROM site_settings
+     WHERE setting_key = ?
+     LIMIT 1`,
+    [String(settingKey || '').trim()]
+  )
+  return row?.setting_value ? String(row.setting_value) : ''
+}
+
+async function saveSiteSettingValue(settingKey, settingValue) {
+  const key = String(settingKey || '').trim()
+  if (!key) return ''
+
+  const value = String(settingValue || '').trim()
+  await dbRun(
+    `INSERT INTO site_settings (setting_key, setting_value, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT (setting_key)
+     DO UPDATE SET
+       setting_value = EXCLUDED.setting_value,
+       updated_at = EXCLUDED.updated_at`,
+    [key, value, nowIso()]
+  )
+  return value
 }
 
 async function upsertContentMediaRecord({
@@ -1219,14 +1276,99 @@ export async function getDocsIndexData() {
   }
 }
 
+export async function getHomepageDescription() {
+  const value = await getSiteSettingValue(HOMEPAGE_DESCRIPTION_KEY)
+  return value || HOMEPAGE_DESCRIPTION_DEFAULT
+}
+
+export async function updateHomepageDescription(description, actor) {
+  const normalizedActor = normalizeActor(actor)
+  if (!normalizedActor?.isAdmin) {
+    throw new Error('Only admin can edit homepage description.')
+  }
+
+  const value = String(description || '').trim()
+  if (!value) {
+    throw new Error('Homepage description cannot be empty.')
+  }
+  if (value.length > 3000) {
+    throw new Error('Homepage description is too long.')
+  }
+
+  return saveSiteSettingValue(HOMEPAGE_DESCRIPTION_KEY, value)
+}
+
+export async function searchPublishedContent(query, limit = 12) {
+  const normalizedQuery = normalizeSearchQuery(query)
+  if (!normalizedQuery) return []
+
+  const safeLimit = Math.max(1, Math.min(30, Number(limit) || 12))
+  const like = `%${normalizedQuery}%`
+  const rows = await dbAll(
+    `SELECT id, type, title, subtitle, summary, content, slug, section_label, updated_at, published_at
+     FROM content_items
+     WHERE status = 'published'
+       AND (
+         title ILIKE ?
+         OR subtitle ILIKE ?
+         OR summary ILIKE ?
+         OR content ILIKE ?
+         OR section_label ILIKE ?
+       )
+     ORDER BY COALESCE(published_at, updated_at) DESC, id DESC
+     LIMIT ?`,
+    [like, like, like, like, like, safeLimit * 3]
+  )
+
+  const needle = normalizedQuery.toLowerCase()
+  return rows
+    .map((row) => {
+      const title = String(row.title || '')
+      const subtitle = String(row.subtitle || '')
+      const summary = String(row.summary || '')
+      const content = String(row.content || '')
+      const sectionLabel = String(row.section_label || '')
+      const plainContent = stripMarkdown(content)
+      const type = String(row.type || 'doc')
+      const slug = String(row.slug || '')
+      const searchable = `${title} ${subtitle} ${summary} ${plainContent}`.toLowerCase()
+      const score =
+        (title.toLowerCase().includes(needle) ? 12 : 0) +
+        (subtitle.toLowerCase().includes(needle) ? 5 : 0) +
+        (sectionLabel.toLowerCase().includes(needle) ? 3 : 0) +
+        (searchable.includes(needle) ? 2 : 0)
+
+      return {
+        type,
+        title,
+        subtitle,
+        sectionLabel,
+        summary: summary || buildSummary(plainContent, ''),
+        snippet: buildSearchSnippet(content || summary, normalizedQuery),
+        url: type === 'blog' ? `/blog/${slug}` : `/docs/${slug}`,
+        updatedAt: String(row.updated_at || row.published_at || ''),
+        score
+      }
+    })
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    )
+    .slice(0, safeLimit)
+    .map(({ score, ...rest }) => rest)
+}
+
 export async function getHomepageSnapshot() {
   const docs = await fetchContent('doc', false)
   const sections = await getDocSections()
+  const siteDescription = await getHomepageDescription()
 
   return {
     blogCount: 0,
     recentBlogs: [],
     docCount: docs.length,
+    siteDescription,
     sections,
     recentDocs: [...docs]
       .sort((left, right) => compareDatesDesc(left.updated_at, right.updated_at))
