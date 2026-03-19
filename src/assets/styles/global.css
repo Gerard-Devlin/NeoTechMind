@@ -33,12 +33,20 @@
 
 /* [Katex] */
 span.katex-display {
-  overflow-y: scroll;
-  padding: 0.5rem;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0.2rem;
+  -webkit-overflow-scrolling: touch;
+}
+span.katex-display > .katex {
+  display: inline-block;
+  min-width: max-content;
 }
 .katex-html {
-  overflow: auto hidden;
-  padding: 3px;
+  overflow: visible;
+  padding: 0;
 }
 .katex-html .base {
   margin-block: 0;
@@ -49,6 +57,15 @@ span.katex-display {
   position: relative !important;
   display: inline-block;
   padding-inline-start: 0.5rem;
+}
+@media (max-width: 640px) {
+  .katex {
+    font-size: 0.96em;
+  }
+
+  span.katex-display {
+    padding: 0.2rem 0;
+  }
 }
 
 /* [KaTeX fallback] */
@@ -78,6 +95,29 @@ span.katex-display {
 .bb-markdown.prose table {
   margin-inline: auto;
   width: max-content;
+}
+
+/* [Markdown link visibility] */
+#content.prose a,
+.bb-markdown.prose a {
+  color: hsl(var(--primary) / 0.96) !important;
+  text-decoration-color: hsl(var(--primary) / 0.42);
+}
+
+#content.prose a:visited,
+.bb-markdown.prose a:visited {
+  color: hsl(214 60% 42%) !important;
+}
+
+#content.prose a:hover,
+.bb-markdown.prose a:hover {
+  color: hsl(var(--primary) / 1) !important;
+  text-decoration-color: hsl(var(--primary) / 0.72);
+}
+
+.dark #content.prose a:visited,
+.dark .bb-markdown.prose a:visited {
+  color: hsl(205 92% 78%) !important;
 }
 
 /* [Shiki basic] */

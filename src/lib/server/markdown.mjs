@@ -1,8 +1,8 @@
 import MarkdownIt from 'markdown-it'
 import markdownItAnchor from 'markdown-it-anchor'
 import markdownItAttrs from 'markdown-it-attrs'
-import markdownItKatex from 'markdown-it-katex'
 import markdownItTaskLists from 'markdown-it-task-lists'
+import katex from 'katex'
 import { codeToHtml } from 'shiki'
 
 import { slugifyText } from './content.mjs'
@@ -27,7 +27,213 @@ function normalizeHeadingText(value) {
     .trim()
 }
 
-function preprocessMathBlocks(source) {
+const LATEX_COMMAND_PATTERN =
+  /\\(?:sum|prod|frac|dfrac|tfrac|sqrt|int|lim|log|ln|sin|cos|tan|max|min|gcd|mid|leq|geq|neq|omega|alpha|beta|gamma|delta|theta|lambda|pi|sigma|mu)\b/
+
+function isFenceDelimiter(line) {
+  return /^(```|~~~)/.test(String(line || '').trim())
+}
+
+function findMatchingBraceEnd(input, startIndex) {
+  if (input[startIndex] !== '{') return -1
+  let depth = 0
+
+  for (let index = startIndex; index < input.length; index += 1) {
+    const char = input[index]
+
+    if (char === '\\') {
+      index += 1
+      continue
+    }
+
+    if (char === '{') {
+      depth += 1
+      continue
+    }
+
+    if (char === '}') {
+      depth -= 1
+      if (depth === 0) {
+        return index
+      }
+    }
+  }
+
+  return -1
+}
+
+function normalizeIncompleteFracCommands(input) {
+  const value = String(input || '')
+  let output = ''
+  let index = 0
+
+  while (index < value.length) {
+    const fragment = value.slice(index)
+    const commandMatch = fragment.match(/^\\(?:d|t)?frac\b/)
+
+    if (!commandMatch) {
+      output += value[index]
+      index += 1
+      continue
+    }
+
+    const command = commandMatch[0]
+    output += command
+    index += command.length
+
+    while (index < value.length && /\s/.test(value[index])) {
+      output += value[index]
+      index += 1
+    }
+
+    if (value[index] !== '{') {
+      continue
+    }
+
+    const numeratorEnd = findMatchingBraceEnd(value, index)
+    if (numeratorEnd < 0) {
+      output += value.slice(index)
+      break
+    }
+
+    output += value.slice(index, numeratorEnd + 1)
+    index = numeratorEnd + 1
+
+    while (index < value.length && /\s/.test(value[index])) {
+      output += value[index]
+      index += 1
+    }
+
+    if (value[index] === '{') {
+      const denominatorEnd = findMatchingBraceEnd(value, index)
+      if (denominatorEnd < 0) {
+        output += value.slice(index)
+        break
+      }
+      output += value.slice(index, denominatorEnd + 1)
+      index = denominatorEnd + 1
+      continue
+    }
+
+    output += '{}'
+  }
+
+  return output
+}
+
+function isLikelyDisplayMathContent(formula) {
+  const normalized = normalizeIncompleteFracCommands(String(formula || '').trim())
+  if (!normalized) return false
+
+  const hasInlineMath = /(^|[^\\])\$(?!\$).+?(^|[^\\])\$(?!\$)/s.test(normalized)
+  const hasCjk = /[\u3400-\u9fff]/.test(normalized)
+
+  if (hasInlineMath && hasCjk) return false
+  if (/\\begin\{[A-Za-z*]+\}|\\end\{[A-Za-z*]+\}/.test(normalized)) return true
+
+  return (
+    LATEX_COMMAND_PATTERN.test(normalized) ||
+    /\\[A-Za-z]+/.test(normalized) ||
+    /[_^]/.test(normalized) ||
+    /[=<>]/.test(normalized)
+  )
+}
+
+function normalizeEscapedMathDelimiters(source) {
+  return String(source || '')
+    .replace(/\\\[((?:.|\n)*?)\\\]/g, (_, formula) => {
+      const normalized = normalizeIncompleteFracCommands(String(formula || '').trim())
+      if (!normalized) return ''
+      return `$$\n${normalized}\n$$`
+    })
+    .replace(/\\\(((?:\\.|[^\\)])*?)\\\)/g, (_, formula) => {
+      const normalized = normalizeIncompleteFracCommands(String(formula || '').trim())
+      if (!normalized) return ''
+      return `$${normalized}$`
+    })
+}
+
+function normalizeBrokenEnvironmentDirectives(source) {
+  return String(source || '')
+    .replace(/\\(begin|end)\s*\n\s*\{([A-Za-z*]+)\}/g, (_full, kind, envName) => {
+      return `\\${kind}{${envName}}`
+    })
+    .replace(/\\(begin|end)\s+\{([A-Za-z*]+)\}/g, (_full, kind, envName) => {
+      return `\\${kind}{${envName}}`
+    })
+}
+
+function splitInlineEnvironmentStarts(source) {
+  const lines = String(source || '').split('\n')
+  const output = []
+
+  for (const line of lines) {
+    let current = line
+    let safety = 0
+
+    while (safety < 12) {
+      safety += 1
+      const beginIndex = current.indexOf('\\begin{')
+      if (beginIndex <= 0) break
+
+      const prefix = current.slice(0, beginIndex)
+      // Avoid splitting if this begin appears inside an inline math fragment.
+      if (prefix.includes('$')) break
+
+      if (prefix.trim()) {
+        output.push(prefix.trimEnd())
+      }
+
+      current = current.slice(beginIndex).trimStart()
+    }
+
+    output.push(current)
+  }
+
+  return output.join('\n')
+}
+
+function isLikelyStandaloneEquationLine(line) {
+  const trimmed = String(line || '').trim()
+  if (!trimmed || trimmed.includes('$')) return false
+  if (/^(#{1,6}\s|>\s|[-*+]\s|```|~~~|\d+\.\s|\|)/.test(trimmed)) return false
+
+  const hasMathToken =
+    LATEX_COMMAND_PATTERN.test(trimmed) || /\\[A-Za-z]+/.test(trimmed) || /[_^]/.test(trimmed)
+  const hasEquationOp = /[=<>]/.test(trimmed)
+  const hasCjk = /[\u3400-\u9fff]/.test(trimmed)
+
+  return hasMathToken && hasEquationOp && !hasCjk
+}
+
+function wrapStandaloneEquationLines(source) {
+  const lines = String(source || '').split('\n')
+  const output = []
+  let inDisplay = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    if (trimmed === '$$') {
+      inDisplay = !inDisplay
+      output.push(line)
+      continue
+    }
+
+    if (inDisplay || !isLikelyStandaloneEquationLine(line)) {
+      output.push(line)
+      continue
+    }
+
+    output.push('$$')
+    output.push(normalizeIncompleteFracCommands(trimmed))
+    output.push('$$')
+  }
+
+  return output.join('\n')
+}
+
+function normalizeMathEnvironmentBlocks(source) {
   const matrixEnvironments = new Set([
     'matrix',
     'pmatrix',
@@ -88,38 +294,34 @@ function preprocessMathBlocks(source) {
     return text.split('\n')
   }
 
-  const lines = String(source || '').replace(/\r\n/g, '\n').split('\n')
+  const lines = String(source || '').split('\n')
   const output = []
-  let inFence = false
   let pendingMath = null
+  let inExplicitDisplayBlock = false
 
-  const flushPendingMath = (forceWrap = false) => {
+  const flushPendingMath = () => {
     if (!pendingMath) return
 
     const normalizedLines = normalizeMathEnvironmentBlock(pendingMath)
-
-    if (forceWrap) {
-      output.push('$$')
-      output.push(...normalizedLines)
-      output.push('$$')
-    } else {
-      output.push(...normalizedLines)
-    }
-
+    output.push('$$')
+    output.push(...normalizedLines)
+    output.push('$$')
     pendingMath = null
   }
 
   for (const line of lines) {
     const trimmed = line.trim()
 
-    if (/^```/.test(trimmed)) {
-      flushPendingMath(true)
-      inFence = !inFence
+    if (trimmed === '$$') {
+      if (pendingMath) {
+        flushPendingMath()
+      }
+      inExplicitDisplayBlock = !inExplicitDisplayBlock
       output.push(line)
       continue
     }
 
-    if (inFence) {
+    if (inExplicitDisplayBlock) {
       output.push(line)
       continue
     }
@@ -146,7 +348,7 @@ function preprocessMathBlocks(source) {
       const escapedEnv = beginMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const closesEnvironmentInline = new RegExp(`\\\\end\\{${escapedEnv}\\}`).test(normalizedLine)
       if (closesEnvironmentInline || hasTrailingDisplayMath) {
-        flushPendingMath(true)
+        flushPendingMath()
       }
       continue
     }
@@ -155,10 +357,7 @@ function preprocessMathBlocks(source) {
       const closesDisplayMath = /\$\$\s*$/.test(trimmed)
 
       if (trimmed === '$$') {
-        output.push('$$')
-        output.push(...normalizeMathEnvironmentBlock(pendingMath))
-        output.push('$$')
-        pendingMath = null
+        flushPendingMath()
         continue
       }
 
@@ -166,7 +365,7 @@ function preprocessMathBlocks(source) {
       pendingMath.lines.push(normalizedLine)
 
       if (closesDisplayMath) {
-        flushPendingMath(true)
+        flushPendingMath()
         continue
       }
 
@@ -174,11 +373,11 @@ function preprocessMathBlocks(source) {
         const escapedEnv = pendingMath.envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         const endMatch = new RegExp(`\\\\end\\{${escapedEnv}\\}`).test(trimmed)
         if (endMatch) {
-          flushPendingMath(true)
+          flushPendingMath()
           continue
         }
       } else if (/\\end\{[A-Za-z*]+\}/.test(trimmed)) {
-        flushPendingMath(true)
+        flushPendingMath()
         continue
       }
 
@@ -188,28 +387,260 @@ function preprocessMathBlocks(source) {
     output.push(line)
   }
 
-  flushPendingMath(true)
+  flushPendingMath()
+  return output.join('\n')
+}
 
-  return normalizeDollarMathDelimiters(
-    output
-    .join('\n')
-    .replace(/\\\[((?:.|\n)*?)\\\]/g, (_, formula) => `$$\n${formula.trim()}\n$$`)
-    .replace(/\\\(((?:\\.|[^\\)])*?)\\\)/g, (_, formula) => `$${formula.trim()}$`)
-  )
+function finalizeDisplayFormula(rawFormula) {
+  const normalized = normalizeIncompleteFracCommands(String(rawFormula || '').trim())
+  if (!normalized) return []
+  if (!isLikelyDisplayMathContent(normalized)) return [normalized]
+  return ['$$', normalized, '$$']
+}
+
+function normalizeDisplayMathDelimiters(source) {
+  const lines = String(source || '').split('\n')
+  const output = []
+  let inDisplay = false
+  let displayBuffer = []
+
+  const appendProcessedTail = (tail) => {
+    if (!tail) return
+    const normalizedTail = normalizeDisplayMathDelimiters(tail)
+    output.push(...normalizedTail.split('\n'))
+  }
+
+  for (const line of lines) {
+    if (inDisplay) {
+      const closeIndex = line.indexOf('$$')
+
+      if (closeIndex < 0) {
+        displayBuffer.push(line)
+        continue
+      }
+
+      displayBuffer.push(line.slice(0, closeIndex))
+      output.push(...finalizeDisplayFormula(displayBuffer.join('\n')))
+      displayBuffer = []
+      inDisplay = false
+      appendProcessedTail(line.slice(closeIndex + 2))
+      continue
+    }
+
+    if (!line.includes('$$')) {
+      output.push(line)
+      continue
+    }
+
+    let cursor = 0
+    let emittedAnySegment = false
+
+    while (cursor < line.length) {
+      const openIndex = line.indexOf('$$', cursor)
+
+      if (openIndex < 0) {
+        const tail = line.slice(cursor)
+        if (tail) {
+          output.push(tail)
+          emittedAnySegment = true
+        }
+        break
+      }
+
+      const before = line.slice(cursor, openIndex)
+      if (before.trim()) {
+        output.push(before.trimEnd())
+        emittedAnySegment = true
+      }
+
+      const closeIndex = line.indexOf('$$', openIndex + 2)
+
+      if (closeIndex < 0) {
+        inDisplay = true
+        displayBuffer = [line.slice(openIndex + 2)]
+        break
+      }
+
+      output.push(...finalizeDisplayFormula(line.slice(openIndex + 2, closeIndex)))
+      emittedAnySegment = true
+      cursor = closeIndex + 2
+    }
+
+    if (!emittedAnySegment && !inDisplay) {
+      output.push('')
+    }
+  }
+
+  if (inDisplay) {
+    output.push(...finalizeDisplayFormula(displayBuffer.join('\n')))
+  }
+
+  return output.join('\n')
+}
+
+function normalizeInlineMathDelimiters(source) {
+  return String(source || '').replace(/(^|[^\\$])\$(?!\$)([^$\n]*?)\$(?!\$)/gm, (_full, prefix, formula) => {
+    const normalized = normalizeIncompleteFracCommands(String(formula || '').trim())
+    if (!normalized) return prefix
+    return `${prefix}$${normalized}$`
+  })
 }
 
 function normalizeDollarMathDelimiters(source) {
-  return String(source || '')
-    .replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
-      const normalized = String(formula || '').trim()
-      if (!normalized) return ''
+  return normalizeInlineMathDelimiters(normalizeDisplayMathDelimiters(source))
+}
+
+function renderMathExpression(formula, displayMode) {
+  const normalized = normalizeIncompleteFracCommands(String(formula || '').trim())
+  if (!normalized) return ''
+
+  try {
+    return katex.renderToString(normalized, {
+      displayMode,
+      throwOnError: false,
+      strict: 'ignore'
+    })
+  } catch {
+    if (displayMode) {
       return `$$\n${normalized}\n$$`
-    })
-    .replace(/(^|[^\\$])\$(?!\$)([^$\n]*?)\$(?!\$)/gm, (_full, prefix, formula) => {
-      const normalized = String(formula || '').trim()
-      if (!normalized) return prefix
-      return `${prefix}$${normalized}$`
-    })
+    }
+    return `$${normalized}$`
+  }
+}
+
+function renderInlineMathSegments(line) {
+  return String(line || '').replace(/(^|[^\\$])\$(?!\$)([^$\n]*?)\$(?!\$)/g, (_full, prefix, formula) => {
+    const rendered = renderMathExpression(formula, false)
+    if (!rendered) return prefix
+    return `${prefix}${rendered}`
+  })
+}
+
+function renderMathMarkup(source) {
+  const lines = String(source || '').split('\n')
+  const output = []
+  let inFence = false
+  let inDisplayMath = false
+  let displayBuffer = []
+
+  for (const line of lines) {
+    if (isFenceDelimiter(line)) {
+      inFence = !inFence
+      output.push(line)
+      continue
+    }
+
+    if (inFence) {
+      output.push(line)
+      continue
+    }
+
+    if (inDisplayMath) {
+      const closeIndex = line.indexOf('$$')
+
+      if (closeIndex < 0) {
+        displayBuffer.push(line)
+        continue
+      }
+
+      displayBuffer.push(line.slice(0, closeIndex))
+      output.push(renderMathExpression(displayBuffer.join('\n'), true))
+      displayBuffer = []
+      inDisplayMath = false
+
+      const tail = line.slice(closeIndex + 2)
+      output.push(renderInlineMathSegments(tail))
+      continue
+    }
+
+    if (!line.includes('$$')) {
+      output.push(renderInlineMathSegments(line))
+      continue
+    }
+
+    let cursor = 0
+    let transformed = ''
+
+    while (cursor < line.length) {
+      const openIndex = line.indexOf('$$', cursor)
+
+      if (openIndex < 0) {
+        transformed += renderInlineMathSegments(line.slice(cursor))
+        break
+      }
+
+      transformed += renderInlineMathSegments(line.slice(cursor, openIndex))
+
+      const closeIndex = line.indexOf('$$', openIndex + 2)
+
+      if (closeIndex < 0) {
+        inDisplayMath = true
+        displayBuffer = [line.slice(openIndex + 2)]
+        break
+      }
+
+      transformed += renderMathExpression(line.slice(openIndex + 2, closeIndex), true)
+      cursor = closeIndex + 2
+    }
+
+    if (!inDisplayMath) {
+      output.push(transformed)
+    }
+  }
+
+  if (inDisplayMath) {
+    output.push(renderMathExpression(displayBuffer.join('\n'), true))
+  }
+
+  return output.join('\n')
+}
+
+function normalizeMathTextChunk(source) {
+  if (!source) return source
+
+  let normalized = normalizeEscapedMathDelimiters(source)
+  normalized = normalizeBrokenEnvironmentDirectives(normalized)
+  normalized = splitInlineEnvironmentStarts(normalized)
+  normalized = normalizeMathEnvironmentBlocks(normalized)
+  normalized = normalizeDollarMathDelimiters(normalized)
+  normalized = wrapStandaloneEquationLines(normalized)
+  normalized = normalizeInlineMathDelimiters(normalized)
+  return normalized
+}
+
+function preprocessMathBlocks(source) {
+  const lines = String(source || '').replace(/\r\n/g, '\n').split('\n')
+  const output = []
+  let inFence = false
+  let textBuffer = []
+
+  const flushTextBuffer = () => {
+    if (textBuffer.length === 0) return
+    output.push(...normalizeMathTextChunk(textBuffer.join('\n')).split('\n'))
+    textBuffer = []
+  }
+
+  for (const line of lines) {
+    if (isFenceDelimiter(line)) {
+      if (!inFence) {
+        flushTextBuffer()
+      }
+
+      inFence = !inFence
+      output.push(line)
+      continue
+    }
+
+    if (inFence) {
+      output.push(line)
+      continue
+    }
+
+    textBuffer.push(line)
+  }
+
+  flushTextBuffer()
+  return output.join('\n')
 }
 
 function buildInlineToc(headings) {
@@ -275,6 +706,11 @@ function splitTitle(marker) {
   const foldable = match.groups.kind.startsWith('???')
   const open = !match.groups.kind.endsWith('+')
   return { style: type.toLowerCase(), title, foldable, open }
+}
+
+function isAdmonitionHeader(line) {
+  const trimmed = String(line || '').trim()
+  return /^(?:!!!|\?\?\?\+?)\s*[A-Za-z][\w-]*(?:\s+"[^"]*")?\s*$/.test(trimmed)
 }
 
 function normalizeLanguage(rawInfo) {
@@ -350,7 +786,6 @@ function createMarkdownEngine(codeBlocks) {
     })
   })
   md.use(markdownItAttrs)
-  md.use(markdownItKatex)
   md.use(markdownItTaskLists, { enabled: true, label: true, labelAfter: true })
 
   const blockTokenTypes = [
@@ -417,7 +852,7 @@ function createMarkdownEngine(codeBlocks) {
 async function renderMarkdownChunk(source) {
   const codeBlocks = []
   const md = createMarkdownEngine(codeBlocks)
-  let html = md.render(source)
+  let html = md.render(renderMathMarkup(source))
 
   if (codeBlocks.length > 0) {
     const resolvedBlocks = await Promise.all(codeBlocks)
@@ -492,7 +927,7 @@ async function renderCompositeMarkdown(source, tocHtml = '') {
       continue
     }
 
-    if (/^(!!!|\?\?\?\+?)/.test(trimmed)) {
+    if (isAdmonitionHeader(trimmed)) {
       await flush()
       const baseIndent = getIndent(line)
       const body = []

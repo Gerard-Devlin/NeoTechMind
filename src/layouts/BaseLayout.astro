@@ -37,37 +37,47 @@ const pathname = Astro.url.pathname
     <script is:inline>
       (() => {
         const FALLBACK_CLASS = 'katex-mathml-fallback'
+        const MAX_FONT_CHECK_ATTEMPTS = 6
+        const FONT_CHECK_INTERVAL_MS = 1200
 
         const enableMathmlFallback = () => {
           document.documentElement.classList.add(FALLBACK_CLASS)
         }
 
-        const verifyKatexFont = () => {
+        const hasKaTeXFont = () => {
           if (!('fonts' in document) || !document.fonts) {
-            enableMathmlFallback()
-            return
+            return true
           }
 
-          const loaded =
+          return (
             document.fonts.check('16px KaTeX_Main') ||
             document.fonts.check('16px "KaTeX_Main"') ||
             document.fonts.check('16px KaTeX_Math') ||
             document.fonts.check('16px "KaTeX_Math"')
+          )
+        }
 
-          if (!loaded) {
-            enableMathmlFallback()
+        const verifyKatexFont = (attempt = 0) => {
+          if (hasKaTeXFont()) {
+            return
           }
+
+          if (attempt >= MAX_FONT_CHECK_ATTEMPTS) {
+            enableMathmlFallback()
+            return
+          }
+
+          window.setTimeout(() => verifyKatexFont(attempt + 1), FONT_CHECK_INTERVAL_MS)
         }
 
         if ('fonts' in document && document.fonts?.ready) {
-          Promise.race([
-            document.fonts.ready,
-            new Promise((resolve) => window.setTimeout(resolve, 1800))
-          ]).then(() => verifyKatexFont())
+          document.fonts.ready
+            .then(() => verifyKatexFont(0))
+            .catch(() => verifyKatexFont(0))
         } else if (document.readyState === 'complete') {
-          verifyKatexFont()
+          verifyKatexFont(0)
         } else {
-          window.addEventListener('load', verifyKatexFont, { once: true })
+          window.addEventListener('load', () => verifyKatexFont(0), { once: true })
         }
       })()
     </script>
