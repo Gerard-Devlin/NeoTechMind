@@ -15,7 +15,7 @@ const { headings } = Astro.props
 
 {
   headings.length > 0 && (
-    <toc-heading class='not-prose rounded-2xl border bg-muted/30 p-4'>
+    <toc-heading class='not-prose p-4'>
       <h2 class='font-medium'>TABLE OF CONTENTS</h2>
       <ul class='mt-4'>
         {headings.map((heading) => (
@@ -61,6 +61,9 @@ const { headings } = Astro.props
     headings: HTMLElement[] = []
     tocLinks: TOCLink[] = []
     headingProgress: Record<string, HeadingProgress> = {}
+    scrollContainer: HTMLElement | null = null
+    activeSlug = ''
+    intervalId: number | null = null
 
     constructor() {
       super()
@@ -76,12 +79,48 @@ const { headings } = Astro.props
       }))
     }
 
+    findScrollableParent = (node: HTMLElement | null): HTMLElement | null => {
+      let current = node?.parentElement || null
+
+      while (current && current !== document.body) {
+        const style = window.getComputedStyle(current)
+        const canScroll = /(auto|scroll)/.test(style.overflowY) && current.scrollHeight > current.clientHeight
+        if (canScroll) return current
+        current = current.parentElement
+      }
+
+      return null
+    }
+
+    keepActiveItemInView = (activeItem: HTMLAnchorElement | null) => {
+      const container = this.scrollContainer
+      if (!container || !activeItem) return
+
+      const containerRect = container.getBoundingClientRect()
+      const itemRect = activeItem.getBoundingClientRect()
+      const safePadding = 28
+      const outOfView =
+        itemRect.top < containerRect.top + safePadding ||
+        itemRect.bottom > containerRect.bottom - safePadding
+
+      if (!outOfView) return
+
+      const offsetInContainer = itemRect.top - containerRect.top + container.scrollTop
+      const targetTop = Math.max(0, offsetInContainer - container.clientHeight * 0.35)
+      container.scrollTo({
+        top: targetTop,
+        behavior: 'smooth'
+      })
+    }
+
     updatePositionAndStyle = () => {
       const windowHeight = window.innerHeight
       const pageOffset =
         window.scrollY - ((document.querySelector<HTMLElement>('#content') as HTMLElement)?.offsetTop || 0)
       const postOffset =
         ((document.querySelector<HTMLElement>('#content') as HTMLElement)?.offsetHeight || 0) + 127
+      let activeItem: HTMLAnchorElement | null = null
+      let activeSlug = ''
 
       this.headings.forEach((el, index) => {
         const nextHeadingTop = this.headings[index + 1]?.offsetTop || postOffset
@@ -99,6 +138,10 @@ const { headings } = Astro.props
         if (!state) return
 
         const { inView, progress } = state
+        if (inView && !activeItem) {
+          activeItem = el
+          activeSlug = slug
+        }
         el.classList.toggle('highlight', inView)
         el.classList.toggle('highlight-bg-translucent', inView)
         el.classList.toggle(
@@ -114,9 +157,17 @@ const { headings } = Astro.props
         bar.classList.toggle('highlight-bg', inView)
         bar.style.setProperty('height', `${progress * 90}%`)
       })
+
+      const nextActiveSlug = activeSlug
+      if (nextActiveSlug && nextActiveSlug !== this.activeSlug) {
+        this.activeSlug = nextActiveSlug
+        this.keepActiveItemInView(activeItem)
+      }
     }
 
     connectedCallback() {
+      this.scrollContainer = this.findScrollableParent(this)
+
       this.tocLinks.forEach((link) => {
         link.element.addEventListener('click', (e) => {
           e.preventDefault()
@@ -127,8 +178,16 @@ const { headings } = Astro.props
         })
       })
 
-      setInterval(this.updatePositionAndStyle, 100)
+      this.intervalId = window.setInterval(this.updatePositionAndStyle, 100)
       window.addEventListener('scroll', this.updatePositionAndStyle)
+    }
+
+    disconnectedCallback() {
+      if (this.intervalId !== null) {
+        window.clearInterval(this.intervalId)
+        this.intervalId = null
+      }
+      window.removeEventListener('scroll', this.updatePositionAndStyle)
     }
   }
 

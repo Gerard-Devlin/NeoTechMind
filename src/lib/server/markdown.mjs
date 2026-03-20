@@ -16,7 +16,7 @@ function escapeHtml(value) {
 }
 
 function buildHeadingId(value) {
-  return slugifyText(value)
+  return slugifyText(normalizeHeadingIdInput(value))
 }
 
 function normalizeHeadingText(value) {
@@ -30,6 +30,108 @@ function normalizeHeadingText(value) {
     .replace(/^#+\s*/, '')
     .replace(/\s+#+$/, '')
     .trim()
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+}
+
+function extractKatexAnnotations(value) {
+  const source = String(value || '')
+  const matches = source.matchAll(
+    /<annotation\b[^>]*encoding=(['"])application\/x-tex\1[^>]*>([\s\S]*?)<\/annotation>/gi
+  )
+  const formulas = []
+
+  for (const match of matches) {
+    const formula = decodeHtmlEntities(match[2] || '').trim()
+    if (formula) {
+      formulas.push(`$${formula}$`)
+    }
+  }
+
+  return formulas
+}
+
+function normalizeHeadingIdInput(value) {
+  const raw = String(value || '')
+  const annotations = extractKatexAnnotations(raw).join(' ')
+  const withoutTags = decodeHtmlEntities(raw.replace(/<[^>]*>/g, ' '))
+  return normalizeHeadingText(`${withoutTags} ${annotations}`)
+}
+
+function extractHeadingTextFromInlineTokens(tokens) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return ''
+  const parts = []
+  let katexSpanDepth = 0
+  let inTexAnnotation = false
+
+  const countMatches = (value, pattern) => (String(value || '').match(pattern) || []).length
+
+  for (const token of tokens) {
+    if (!token) continue
+
+    if (token.type === 'html_inline' || token.type === 'html_block') {
+      const raw = String(token.content || '')
+
+      if (
+        katexSpanDepth === 0 &&
+        /<span\b[^>]*class=(['"])[^"']*\bkatex(?:-display)?\b[^"']*\1/i.test(raw)
+      ) {
+        katexSpanDepth += countMatches(raw, /<span\b/gi) - countMatches(raw, /<\/span>/gi)
+        if (katexSpanDepth <= 0) katexSpanDepth = 1
+      } else if (katexSpanDepth > 0) {
+        if (/<annotation\b[^>]*encoding=(['"])application\/x-tex\1/i.test(raw)) {
+          inTexAnnotation = true
+        }
+        if (/<\/annotation>/i.test(raw)) {
+          inTexAnnotation = false
+        }
+        katexSpanDepth += countMatches(raw, /<span\b/gi) - countMatches(raw, /<\/span>/gi)
+        if (katexSpanDepth <= 0) {
+          katexSpanDepth = 0
+          inTexAnnotation = false
+        }
+        continue
+      }
+
+      const annotations = extractKatexAnnotations(raw)
+      if (annotations.length > 0) {
+        parts.push(...annotations)
+        continue
+      }
+
+      const text = decodeHtmlEntities(raw.replace(/<[^>]*>/g, ' '))
+      if (text.trim()) parts.push(text)
+      continue
+    }
+
+    if (token.type === 'text' || token.type === 'code_inline') {
+      const content = String(token.content || '')
+      if (katexSpanDepth > 0 && !inTexAnnotation) continue
+      if (content) parts.push(content)
+      continue
+    }
+
+    if (token.type === 'image') {
+      const alt = String(token.content || token.attrGet?.('alt') || '')
+      if (alt) parts.push(alt)
+      continue
+    }
+
+    if (typeof token.content === 'string' && token.content.trim()) {
+      if (katexSpanDepth > 0 && !inTexAnnotation) continue
+      parts.push(token.content)
+    }
+  }
+
+  return normalizeHeadingText(parts.join(' '))
 }
 
 const LATEX_COMMAND_PATTERN =
@@ -893,6 +995,7 @@ function createMarkdownEngine(codeBlocks) {
   md.use(markdownItAnchor, {
     level: [1, 2, 3, 4, 5, 6],
     slugify: buildHeadingId,
+    getTokensText: (tokens) => extractHeadingTextFromInlineTokens(tokens),
     permalink: markdownItAnchor.permalink.linkInsideHeader({
       class: 'anchor',
       symbol: '#',
@@ -1136,7 +1239,9 @@ export function extractHeadings(source) {
     if (token.type !== 'heading_open') continue
 
     const inlineToken = tokens[index + 1]
-    const text = normalizeHeadingText(inlineToken?.content || '')
+    const text =
+      extractHeadingTextFromInlineTokens(inlineToken?.children || []) ||
+      normalizeHeadingIdInput(inlineToken?.content || '')
     const depth = Number(token.tag.replace('h', ''))
 
     if (!text || Number.isNaN(depth)) continue
