@@ -21,6 +21,11 @@ function buildHeadingId(value) {
 
 function normalizeHeadingText(value) {
   return String(value)
+    // Keep link text but remove target URLs from markdown links.
+    .replace(/!?\[([^\]]*?)\]\((?:\\.|[^\\)])*\)/g, '$1')
+    // Remove auto-link URLs inside angle brackets and bare URLs.
+    .replace(/<https?:\/\/[^>\s]+>/gi, '')
+    .replace(/\bhttps?:\/\/[^\s)]+/gi, '')
     .replace(/\s+/g, ' ')
     .replace(/^#+\s*/, '')
     .replace(/\s+#+$/, '')
@@ -155,6 +160,9 @@ function normalizeEscapedMathDelimiters(source) {
 
 function normalizeBrokenEnvironmentDirectives(source) {
   return String(source || '')
+    .replace(/(^|\n)([ \t]*)\\{2}(begin|end)\s*\{([A-Za-z*]+)\}/g, (_full, prefix, indent, kind, envName) => {
+      return `${prefix}${indent}\\${kind}{${envName}}`
+    })
     .replace(/\\(begin|end)\s*\n\s*\{([A-Za-z*]+)\}/g, (_full, kind, envName) => {
       return `\\${kind}{${envName}}`
     })
@@ -254,6 +262,10 @@ function normalizeMathEnvironmentBlocks(source) {
       return block.lines
     }
 
+    text = text.replace(/\\{2}(begin|end)\{([A-Za-z*]+)\}/g, (_full, kind, name) => {
+      return `\\${kind}{${name}}`
+    })
+
     const escapedEnv = envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const endPattern = new RegExp(`\\\\end\\{${escapedEnv}\\}`)
 
@@ -326,7 +338,7 @@ function normalizeMathEnvironmentBlocks(source) {
       continue
     }
 
-    const beginMatch = trimmed.match(/^(?:\$\$\s*)?\\begin\{([A-Za-z*]+)\}/)
+    const beginMatch = trimmed.match(/^(?:\$\$\s*)?\\{1,2}begin\{([A-Za-z*]+)\}/)
 
     if (!pendingMath && beginMatch) {
       const hasLeadingDisplayMath = /^\$\$/.test(trimmed)
@@ -340,13 +352,17 @@ function normalizeMathEnvironmentBlocks(source) {
         normalizedLine = normalizedLine.replace(/\s*\$\$\s*$/, '')
       }
 
+      normalizedLine = normalizedLine.replace(/\\{2}begin\{([A-Za-z*]+)\}/, (_full, name) => {
+        return `\\begin{${name}}`
+      })
+
       pendingMath = {
         envName: beginMatch[1],
         lines: [normalizedLine]
       }
 
       const escapedEnv = beginMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const closesEnvironmentInline = new RegExp(`\\\\end\\{${escapedEnv}\\}`).test(normalizedLine)
+      const closesEnvironmentInline = new RegExp(`\\\\{1,2}end\\{${escapedEnv}\\}`).test(normalizedLine)
       if (closesEnvironmentInline || hasTrailingDisplayMath) {
         flushPendingMath()
       }
@@ -371,12 +387,12 @@ function normalizeMathEnvironmentBlocks(source) {
 
       if (pendingMath.envName) {
         const escapedEnv = pendingMath.envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        const endMatch = new RegExp(`\\\\end\\{${escapedEnv}\\}`).test(trimmed)
+        const endMatch = new RegExp(`\\\\{1,2}end\\{${escapedEnv}\\}`).test(trimmed)
         if (endMatch) {
           flushPendingMath()
           continue
         }
-      } else if (/\\end\{[A-Za-z*]+\}/.test(trimmed)) {
+      } else if (/\\{1,2}end\{[A-Za-z*]+\}/.test(trimmed)) {
         flushPendingMath()
         continue
       }
@@ -490,8 +506,43 @@ function normalizeDollarMathDelimiters(source) {
   return normalizeInlineMathDelimiters(normalizeDisplayMathDelimiters(source))
 }
 
+function normalizeAlignmentEnvironments(source, displayMode) {
+  let value = String(source || '').trim()
+  if (!value) return value
+
+  value = value
+    .replace(/\\begin\{align\*?\}/g, '\\begin{aligned}')
+    .replace(/\\end\{align\*?\}/g, '\\end{aligned}')
+
+  const hasBeginEnv = /\\begin\{[A-Za-z*]+\}/.test(value)
+  const hasEndEnv = /\\end\{[A-Za-z*]+\}/.test(value)
+  const hasAlignmentMarker = /(^|[^\\])&/.test(value)
+
+  if (displayMode && hasAlignmentMarker && !hasBeginEnv) {
+    value = `\\begin{aligned}\n${value}\n\\end{aligned}`
+  }
+
+  const hasBeginAligned = /\\begin\{aligned\}/.test(value)
+  const hasEndAligned = /\\end\{aligned\}/.test(value)
+
+  if (hasBeginAligned && !hasEndAligned) {
+    value = `${value}\n\\end{aligned}`
+  } else if (!hasBeginAligned && hasEndAligned) {
+    value = `\\begin{aligned}\n${value}`
+  } else if (displayMode && hasEndEnv && !hasBeginEnv && hasAlignmentMarker) {
+    value = `\\begin{aligned}\n${value}`
+  } else if (displayMode && hasBeginEnv && !hasEndEnv) {
+    value = `${value}\n\\end{aligned}`
+  }
+
+  return value
+}
+
 function renderMathExpression(formula, displayMode) {
-  const normalized = normalizeIncompleteFracCommands(String(formula || '').trim())
+  const normalized = normalizeAlignmentEnvironments(
+    normalizeIncompleteFracCommands(String(formula || '').trim()),
+    displayMode
+  )
   if (!normalized) return ''
 
   try {
@@ -514,6 +565,37 @@ function renderInlineMathSegments(line) {
     if (!rendered) return prefix
     return `${prefix}${rendered}`
   })
+}
+
+function renderHeadingMathHtml(value) {
+  const source = String(value || '')
+  if (!source) return ''
+
+  const pattern = /(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$|(?<!\\)\$([^$\n]+?)(?<!\\)\$/g
+  let output = ''
+  let lastIndex = 0
+  let hasMath = false
+
+  for (const match of source.matchAll(pattern)) {
+    const matchIndex = match.index ?? 0
+    const full = match[0] || ''
+    const formula = String(match[1] ?? match[2] ?? '')
+
+    output += escapeHtml(source.slice(lastIndex, matchIndex))
+
+    const rendered = renderMathExpression(formula, false)
+    if (rendered) {
+      output += rendered
+      hasMath = true
+    } else {
+      output += escapeHtml(full)
+    }
+
+    lastIndex = matchIndex + full.length
+  }
+
+  output += escapeHtml(source.slice(lastIndex))
+  return hasMath ? output : ''
 }
 
 function renderMathMarkup(source) {
@@ -600,16 +682,48 @@ function normalizeMathTextChunk(source) {
 
   let normalized = normalizeEscapedMathDelimiters(source)
   normalized = normalizeBrokenEnvironmentDirectives(normalized)
-  normalized = splitInlineEnvironmentStarts(normalized)
-  normalized = normalizeMathEnvironmentBlocks(normalized)
   normalized = normalizeDollarMathDelimiters(normalized)
-  normalized = wrapStandaloneEquationLines(normalized)
-  normalized = normalizeInlineMathDelimiters(normalized)
   return normalized
 }
 
+function normalizeHeadingDisplayMath(source) {
+  const lines = String(source || '').split('\n')
+  const output = []
+  let inFence = false
+
+  for (const line of lines) {
+    if (isFenceDelimiter(line)) {
+      inFence = !inFence
+      output.push(line)
+      continue
+    }
+
+    if (inFence) {
+      output.push(line)
+      continue
+    }
+
+    const headingMatch = line.match(/^(\s{0,3}#{1,6}\s+)(.*)$/)
+    if (!headingMatch) {
+      output.push(line)
+      continue
+    }
+
+    const prefix = headingMatch[1]
+    const content = headingMatch[2].replace(
+      /(?<!\\)\$\$([^\n]*?)(?<!\\)\$\$/g,
+      (_full, formula) => `$${String(formula || '').trim()}$`
+    )
+
+    output.push(`${prefix}${content}`)
+  }
+
+  return output.join('\n')
+}
+
 function preprocessMathBlocks(source) {
-  const lines = String(source || '').replace(/\r\n/g, '\n').split('\n')
+  const normalizedSource = normalizeHeadingDisplayMath(String(source || '').replace(/\r\n/g, '\n'))
+  const lines = normalizedSource.split('\n')
   const output = []
   let inFence = false
   let textBuffer = []
@@ -667,7 +781,8 @@ function buildInlineToc(headings) {
       html += '</li>'
     }
 
-    html += `<li><a href="#${heading.slug}">${escapeHtml(heading.text)}</a>`
+    const headingLabel = heading.html || escapeHtml(heading.text)
+    html += `<li><a href="#${heading.slug}">${headingLabel}</a>`
   }
 
   while (currentDepth >= minDepth) {
@@ -1026,10 +1141,12 @@ export function extractHeadings(source) {
 
     if (!text || Number.isNaN(depth)) continue
 
+    const html = renderHeadingMathHtml(text)
     headings.push({
       depth,
       slug: buildHeadingId(text),
-      text
+      text,
+      ...(html ? { html } : {})
     })
   }
 

@@ -1,10 +1,11 @@
 ---
-import { BackToTop, TOC } from 'astro-pure/components/pages'
+import { BackToTop } from 'astro-pure/components/pages'
 import { MediumZoom } from 'astro-pure/advanced'
 import config from 'virtual:config'
 import PageLayout from '@/layouts/BaseLayout.astro'
 import DocsTree from '@/components/dynamic/DocsTree.astro'
 import MarkdownContent from '@/components/dynamic/MarkdownContent.astro'
+import TableOfContents from '@/components/dynamic/TableOfContents.astro'
 import { getDocPageData } from '@/lib/server/content.mjs'
 import { renderMarkdown } from '@/lib/server/markdown.mjs'
 
@@ -111,7 +112,7 @@ const sectionTree = page?.sectionTree || []
               class='animate top-20 z-30 min-w-48 overflow-y-scroll max-lg:hidden md:sticky lg:shrink-0'
               style='height:calc(100vh - 7rem);'
             >
-              {rendered.headings.length > 0 && <TOC headings={rendered.headings} />}
+              {rendered.headings.length > 0 && <TableOfContents headings={rendered.headings} />}
             </aside>
           </div>
         </>
