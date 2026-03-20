@@ -1,0 +1,99 @@
+---
+import { Icon } from 'astro-pure/user'
+import config from '@/site-config'
+import { getSiteBrandingSettings } from '@/lib/server/content.mjs'
+
+const footerConf = config.footer
+const branding = await getSiteBrandingSettings()
+const siteName = String(branding.siteTitle || config.title || config.author || 'NeoTechMind').trim()
+
+const social = {
+  ...(footerConf.social || {}),
+  rss: (footerConf.social || {}).rss || { label: 'RSS', url: '/rss.xml' }
+}
+const socialEntries = Object.entries(social)
+  .map(([platform, value]) => {
+    if (!value || typeof value !== 'object') return null
+    const label = String(value.label || platform)
+    const url = String(value.url || '')
+    if (!url) return null
+    return { platform, label, url }
+  })
+  .filter((item): item is { platform: string; label: string; url: string } => Boolean(item))
+
+const footerLink1 = footerConf.links?.filter(({ pos }) => pos === 1) || []
+const footerLink2 = footerConf.links?.filter(({ pos }) => pos === 2) || []
+---
+
+<footer class='mx-auto mb-5 mt-16 w-full'>
+  <div class='border-t pt-5'>
+    <div class='flex items-center gap-y-3 max-sm:flex-col sm:justify-between sm:gap-y-0'>
+      <div class='flex items-center gap-x-4 gap-y-2 text-muted-foreground max-sm:flex-col'>
+        {
+          footerLink1.length > 0 && (
+            <div>
+              {footerLink1.map(({ title, link, style }, index) => (
+                <>
+                  <a href={link} target='_blank' class={style}>
+                    {title}
+                  </a>
+                  {index < footerLink1.length - 1 && <span class='mx-1'>•</span>}
+                </>
+              ))}
+            </div>
+          )
+        }
+
+        <div>
+          {config.footer.year}
+          {siteName}
+          {
+            footerLink2.length > 0 && (
+              <>
+                {' & '}
+                <span>
+                  {footerLink2.map(({ title, link, style }) => (
+                    <span>
+                      <a href={link} target='_blank' class={style}>
+                        {title}
+                      </a>
+                    </span>
+                  ))}
+                </span>
+              </>
+            )
+          }
+        </div>
+
+        {
+          footerConf.credits && (
+            <span>
+              <a href='https://github.com/withastro/astro' target='_blank'>Astro</a>
+              {' & '}
+              <a href='https://github.com/cworld1/astro-theme-pure' target='_blank'>Pure</a>
+              {' theme powered'}
+            </span>
+          )
+        }
+      </div>
+
+      <div class='flex items-center gap-x-4'>
+        {
+          socialEntries.map((item) => (
+            <a href={item.url} aria-label={item.label}>
+              <Icon name={item.platform as keyof typeof social} />
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+</footer>
+
+<style>
+  footer a {
+    color: hsl(var(--foreground) / var(--un-text-opacity, 1));
+    text-decoration: underline;
+    font-weight: 500;
+  }
+</style>

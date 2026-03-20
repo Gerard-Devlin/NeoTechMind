@@ -255,3 +255,212 @@
   gap: 0.45rem;
   justify-content: flex-end;
 }
+
+.media-tree {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.media-tree-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.25rem;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 0.85rem;
+  background: hsl(var(--muted) / 0.1);
+  padding: 0.45rem 0.68rem;
+  padding-left: calc(0.7rem + var(--tree-depth, 0) * 1.2rem);
+}
+
+.media-tree-row.is-folder {
+  background: hsl(var(--muted) / 0.16);
+}
+
+.tree-kind {
+  border-radius: 999px;
+  border: 1px solid hsl(var(--border));
+  padding: 0.1rem 0.52rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+}
+
+.media-tree-row.is-folder .tree-kind {
+  border-color: hsl(220 70% 66% / 0.55);
+  color: hsl(220 65% 54%);
+  background: hsl(220 80% 96%);
+}
+
+.media-tree-row.is-file .tree-kind {
+  border-color: hsl(160 48% 62% / 0.55);
+  color: hsl(158 58% 33%);
+  background: hsl(152 52% 95%);
+}
+
+.tree-name {
+  font-size: 0.92rem;
+  font-weight: 550;
+}
+
+.tree-path {
+  margin-left: auto;
+  max-width: min(100%, 36rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-meta {
+  width: 100%;
+  font-size: 0.76rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.dark .media-tree-row {
+  background: hsl(var(--muted) / 0.2);
+}
+
+.dark .media-tree-row.is-folder .tree-kind {
+  border-color: hsl(220 58% 44% / 0.8);
+  color: hsl(220 78% 78%);
+  background: hsl(220 40% 20%);
+}
+
+.dark .media-tree-row.is-file .tree-kind {
+  border-color: hsl(160 44% 40% / 0.85);
+  color: hsl(160 66% 80%);
+  background: hsl(160 28% 18%);
+}
+
+.attachment-manager {
+  display: grid;
+  gap: 0.9rem;
+}
+
+@media (min-width: 1024px) {
+  .attachment-manager {
+    grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 1fr);
+    align-items: start;
+  }
+}
+
+.attachment-tree-panel,
+.attachment-detail-panel {
+  border: 1px solid hsl(var(--border));
+  border-radius: 1rem;
+  background: hsl(var(--muted) / 0.12);
+}
+
+.attachment-tree-panel {
+  max-height: min(72vh, 44rem);
+  overflow: auto;
+  padding: 0.65rem;
+}
+
+.attachment-tree-root,
+.attachment-tree-children {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.attachment-tree-children {
+  margin-top: 0.25rem;
+}
+
+.attachment-folder-summary {
+  display: flex;
+  align-items: center;
+  min-height: 2rem;
+  border-radius: 0.7rem;
+  padding-left: calc(0.55rem + var(--tree-level, 0) * 1.05rem);
+  cursor: pointer;
+  user-select: none;
+}
+
+.attachment-folder-summary:hover {
+  background: hsl(var(--muted) / 0.32);
+}
+
+.attachment-folder-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.attachment-file-row {
+  padding-left: calc(0.55rem + var(--tree-level, 0) * 1.05rem);
+}
+
+.attachment-file-btn {
+  width: 100%;
+  min-height: 2rem;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 0.7rem;
+  padding: 0.32rem 0.6rem;
+  font-size: 0.88rem;
+  color: hsl(var(--muted-foreground));
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.attachment-file-btn:hover {
+  border-color: hsl(var(--border));
+  background: hsl(var(--muted) / 0.35);
+  color: hsl(var(--foreground));
+}
+
+.attachment-file-btn.is-active {
+  border-color: hsl(var(--primary) / 0.5);
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--foreground));
+}
+
+.attachment-detail-panel {
+  padding: 0.9rem 1rem;
+}
+
+.attachment-detail-body {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.attachment-detail-path {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.65rem;
+  background: hsl(var(--background));
+  padding: 0.45rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.attachment-detail-list {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.attachment-detail-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid hsl(var(--border) / 0.65);
+  border-radius: 0.65rem;
+  background: hsl(var(--background));
+  padding: 0.42rem 0.55rem;
+  font-size: 0.84rem;
+}
+
+.attachment-detail-list li span {
+  color: hsl(var(--muted-foreground));
+}
+
+.attachment-detail-image {
+  width: 100%;
+  max-height: 18rem;
+  object-fit: contain;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.8rem;
+  background: hsl(var(--background));
+}

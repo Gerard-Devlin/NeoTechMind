@@ -15,6 +15,9 @@ const SECTION_ORDER = ['C', 'Python', 'DSA', 'DLD', 'DBS', 'COA', 'ML&DL']
 const textCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
 let sectionCleanupPromise = null
 const HOMEPAGE_DESCRIPTION_KEY = 'homepage_description'
+const SITE_TITLE_KEY = 'site_title'
+const SITE_FAVICON_HREF_KEY = 'site_favicon_href'
+const HOMEPAGE_LOGO_SRC_KEY = 'homepage_logo_src'
 const HOMEPAGE_DESCRIPTION_DEFAULT =
   'NeoTechMind 是一个开源学习资源平台，旨在帮助你轻松理解、探索并掌握计算机科学核心概念。从编程语言到深度学习，我们让每个人都能更容易地学习。'
 
@@ -199,6 +202,82 @@ async function readFileSize(mediaPath) {
   }
 
   return 0
+}
+
+function bumpCounter(map, key, delta = 1) {
+  const next = Number(map.get(key) || 0) + Number(delta || 0)
+  map.set(key, next)
+}
+
+async function collectUploadReferenceCounter() {
+  const counter = new Map()
+
+  const contentRows = await dbAll(
+    `SELECT content, hero_image
+     FROM content_items`
+  )
+
+  for (const row of contentRows) {
+    const paths = new Set(
+      extractMediaPaths(String(row.content || ''), String(row.hero_image || ''))
+        .map((value) => normalizeUploadPath(value))
+        .filter(Boolean)
+    )
+    for (const path of paths) {
+      bumpCounter(counter, path, 1)
+    }
+  }
+
+  const settingRows = await dbAll(
+    `SELECT setting_value
+     FROM site_settings`
+  )
+
+  for (const row of settingRows) {
+    const raw = String(row.setting_value || '')
+    const directPath = normalizeUploadPath(raw)
+    if (directPath) {
+      bumpCounter(counter, directPath, 1)
+    }
+
+    const paths = new Set(
+      extractMediaPaths(raw, '')
+        .map((value) => normalizeUploadPath(value))
+        .filter(Boolean)
+    )
+    for (const path of paths) {
+      bumpCounter(counter, path, 1)
+    }
+  }
+
+  return counter
+}
+
+async function cleanupUnreferencedUploadMedia() {
+  const referenceCounter = await collectUploadReferenceCounter()
+  const uploadRows = await dbAll(
+    `SELECT file_path
+     FROM media_files
+     WHERE file_path LIKE '/uploads/%'`
+  )
+
+  let deleted = 0
+  for (const row of uploadRows) {
+    const filePath = normalizeUploadPath(row.file_path)
+    if (!filePath) continue
+    if (Number(referenceCounter.get(filePath) || 0) > 0) continue
+
+    await dbRun(`DELETE FROM content_media WHERE file_path = ?`, [filePath])
+    const result = await dbRun(`DELETE FROM media_files WHERE file_path = ?`, [filePath])
+    if (Number(result.rowCount || 0) > 0) {
+      deleted += 1
+    }
+  }
+
+  return {
+    scanned: Number(uploadRows.length || 0),
+    deleted
+  }
 }
 
 async function upsertMediaFileBlob({ filePath, mimeType = null, blobData = null }) {
@@ -575,6 +654,21 @@ function normalizeSearchQuery(value) {
   return String(value || '')
     .trim()
     .replace(/\s+/g, ' ')
+}
+
+function normalizeSiteTitleValue(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+function normalizePublicUrlOrPath(value) {
+  const normalized = String(value || '').trim()
+  if (!normalized) return ''
+  if (normalized.length > 500) return ''
+  if (/^\/[^\s]*$/u.test(normalized)) return normalized
+  if (/^https?:\/\/[^\s]+$/iu.test(normalized)) return normalized
+  return ''
 }
 
 function buildSearchSnippet(content, query) {
@@ -1016,6 +1110,57 @@ export async function listRecentMedia(limit = 30, actor) {
   }))
 }
 
+export async function listMediaStorage(limit = 1000, actor) {
+  const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 1000))
+  const normalizedActor = normalizeActor(actor)
+  const uploadReferenceCounter = await collectUploadReferenceCounter()
+
+  const rows =
+    normalizedActor && !normalizedActor.isAdmin
+      ? await dbAll(
+          `SELECT
+             mf.file_path,
+             mf.mime_type,
+             mf.size_bytes,
+             mf.updated_at,
+             COUNT(cm.id) AS ref_count
+           FROM media_files mf
+           LEFT JOIN content_media cm
+             ON cm.file_path = mf.file_path
+           WHERE cm.owner_user_id = ?
+           GROUP BY mf.file_path, mf.mime_type, mf.size_bytes, mf.updated_at
+           ORDER BY mf.file_path ASC
+           LIMIT ?`,
+          [normalizedActor.userId, safeLimit]
+        )
+      : await dbAll(
+          `SELECT
+             mf.file_path,
+             mf.mime_type,
+             mf.size_bytes,
+             mf.updated_at,
+             COUNT(cm.id) AS ref_count
+           FROM media_files mf
+           LEFT JOIN content_media cm
+             ON cm.file_path = mf.file_path
+           GROUP BY mf.file_path, mf.mime_type, mf.size_bytes, mf.updated_at
+           ORDER BY mf.file_path ASC
+           LIMIT ?`,
+          [safeLimit]
+        )
+
+  return rows.map((row) => ({
+    file_path: String(row.file_path || ''),
+    mime_type: String(row.mime_type || ''),
+    size_bytes: Number(row.size_bytes || 0),
+    updated_at: String(row.updated_at || ''),
+    ref_count: Math.max(
+      Number(row.ref_count || 0),
+      Number(uploadReferenceCounter.get(String(row.file_path || '')) || 0)
+    )
+  }))
+}
+
 export async function registerUploadedMedia(input) {
   const normalizedPath = normalizeMediaPath(input?.filePath || '')
   if (!normalizedPath) return null
@@ -1298,6 +1443,20 @@ export async function getHomepageDescription() {
   return value || HOMEPAGE_DESCRIPTION_DEFAULT
 }
 
+export async function getSiteBrandingSettings() {
+  const [siteTitle, siteFaviconHref, homepageLogoSrc] = await Promise.all([
+    getSiteSettingValue(SITE_TITLE_KEY),
+    getSiteSettingValue(SITE_FAVICON_HREF_KEY),
+    getSiteSettingValue(HOMEPAGE_LOGO_SRC_KEY)
+  ])
+
+  return {
+    siteTitle: normalizeSiteTitleValue(siteTitle),
+    siteFaviconHref: normalizePublicUrlOrPath(siteFaviconHref),
+    homepageLogoSrc: normalizePublicUrlOrPath(homepageLogoSrc)
+  }
+}
+
 export async function updateHomepageDescription(description, actor) {
   const normalizedActor = normalizeActor(actor)
   if (!normalizedActor?.isAdmin) {
@@ -1313,6 +1472,58 @@ export async function updateHomepageDescription(description, actor) {
   }
 
   return saveSiteSettingValue(HOMEPAGE_DESCRIPTION_KEY, value)
+}
+
+export async function updateSiteSettings(
+  { homepageDescription = '', siteTitle = '', siteFaviconHref = '', homepageLogoSrc = '' },
+  actor
+) {
+  const normalizedActor = normalizeActor(actor)
+  if (!normalizedActor?.isAdmin) {
+    throw new Error('Only admin can edit site settings.')
+  }
+
+  const descriptionValue = String(homepageDescription || '').trim()
+  if (!descriptionValue) {
+    throw new Error('Homepage description cannot be empty.')
+  }
+  if (descriptionValue.length > 3000) {
+    throw new Error('Homepage description is too long.')
+  }
+
+  const siteTitleValue = normalizeSiteTitleValue(siteTitle)
+  if (!siteTitleValue) {
+    throw new Error('Site title cannot be empty.')
+  }
+  if (siteTitleValue.length > 120) {
+    throw new Error('Site title is too long.')
+  }
+
+  const faviconValue = normalizePublicUrlOrPath(siteFaviconHref)
+  if (String(siteFaviconHref || '').trim() && !faviconValue) {
+    throw new Error('Favicon must be a /path or http(s) URL.')
+  }
+
+  const homepageLogoValue = normalizePublicUrlOrPath(homepageLogoSrc)
+  if (String(homepageLogoSrc || '').trim() && !homepageLogoValue) {
+    throw new Error('Homepage logo must be a /path or http(s) URL.')
+  }
+
+  await Promise.all([
+    saveSiteSettingValue(HOMEPAGE_DESCRIPTION_KEY, descriptionValue),
+    saveSiteSettingValue(SITE_TITLE_KEY, siteTitleValue),
+    saveSiteSettingValue(SITE_FAVICON_HREF_KEY, faviconValue),
+    saveSiteSettingValue(HOMEPAGE_LOGO_SRC_KEY, homepageLogoValue)
+  ])
+
+  await cleanupUnreferencedUploadMedia()
+
+  return {
+    homepageDescription: descriptionValue,
+    siteTitle: siteTitleValue,
+    siteFaviconHref: faviconValue,
+    homepageLogoSrc: homepageLogoValue
+  }
 }
 
 export async function searchPublishedContent(query, limit = 12) {
@@ -1379,13 +1590,18 @@ export async function searchPublishedContent(query, limit = 12) {
 export async function getHomepageSnapshot() {
   const docs = await fetchContent('doc', false)
   const sections = await getDocSections()
-  const siteDescription = await getHomepageDescription()
+  const [siteDescription, brandingSettings] = await Promise.all([
+    getHomepageDescription(),
+    getSiteBrandingSettings()
+  ])
 
   return {
     blogCount: 0,
     recentBlogs: [],
     docCount: docs.length,
+    siteTitle: brandingSettings.siteTitle,
     siteDescription,
+    homepageLogoSrc: brandingSettings.homepageLogoSrc,
     sections,
     recentDocs: [...docs]
       .sort((left, right) => compareDatesDesc(left.updated_at, right.updated_at))
@@ -1516,7 +1732,9 @@ export async function saveContent(input, actor) {
     )
 
     const saved = await getContentById(current.id)
-    return syncContentMediaLinks(saved)
+    const synced = await syncContentMediaLinks(saved)
+    await cleanupUnreferencedUploadMedia()
+    return synced
   }
 
   const inserted = await dbGet(
@@ -1568,7 +1786,9 @@ export async function saveContent(input, actor) {
   )
 
   const created = await getContentById(inserted.id)
-  return syncContentMediaLinks(created)
+  const synced = await syncContentMediaLinks(created)
+  await cleanupUnreferencedUploadMedia()
+  return synced
 }
 
 export async function deleteImportedDocs() {
@@ -1607,6 +1827,7 @@ export async function deleteContentById(id, actor) {
   }
 
   const result = await dbRun('DELETE FROM content_items WHERE id = ?', [id])
+  await cleanupUnreferencedUploadMedia()
   return Number(result.rowCount || 0) > 0
 }
 

@@ -3,21 +3,24 @@ import { Image } from 'astro:assets'
 
 import { Quote } from 'astro-pure/advanced'
 import { Icon, Label } from 'astro-pure/user'
-import PageLayout from '@/layouts/BaseLayout.astro'
 import Section from '@/components/home/Section.astro'
+import PageLayout from '@/layouts/BaseLayout.astro'
 import { getHomepageSnapshot } from '@/lib/server/content.mjs'
 import config from '@/site-config'
 
 const snapshot = await getHomepageSnapshot()
 const sections = snapshot.sections ?? []
 const recentDocs = snapshot.recentDocs ?? []
+const siteTitle = String(snapshot.siteTitle || config.title || config.author || 'NeoTechMind')
 const siteDescription = String(snapshot.siteDescription || '')
-const imagePath = config.logo.src
+const imagePath = String(snapshot.homepageLogoSrc || config.logo.src || '').trim()
+
 const images = import.meta.glob<{ default: ImageMetadata }>(
   '/src/assets/*.{jpeg,jpg,png,gif,avif,webp}'
 )
+const imageLoader = imagePath.startsWith('/src/assets/') ? images[imagePath] : null
 
-if (!images[imagePath]) {
+if (imagePath.startsWith('/src/assets/') && !imageLoader) {
   throw new Error(
     `"${imagePath}" does not exist in glob: "src/assets/*.{jpeg,jpg,png,gif,avif,webp}"`
   )
@@ -25,22 +28,34 @@ if (!images[imagePath]) {
 ---
 
 <PageLayout
-  meta={{ title: '首页', description: 'NeoTechMind 课程文档与知识库' }}
+  meta={{ title: '首页', description: siteTitle + ' 课程文档与知识库' }}
   highlightColor='#659EB9'
   containerClass='max-w-[88rem]'
 >
   <main class='flex w-full flex-col items-center'>
     <section class='animate mb-10 flex flex-col items-center gap-y-7' id='content-header'>
-      <Image
-        src={images[imagePath]()}
-        alt={config.logo.alt || 'Profile'}
-        class='h-28 w-auto rounded-full border p-1'
-        loading='eager'
-        fetchpriority='high'
-      />
+      {
+        imageLoader ? (
+          <Image
+            src={imageLoader()}
+            alt={config.logo.alt || 'Profile'}
+            class='h-28 w-auto rounded-full border p-1'
+            loading='eager'
+            fetchpriority='high'
+          />
+        ) : (
+          <img
+            src={imagePath}
+            alt={config.logo.alt || 'Profile'}
+            class='h-28 w-auto rounded-full border p-1 object-cover'
+            loading='eager'
+            fetchpriority='high'
+          />
+        )
+      }
 
       <div class='flex flex-col items-center gap-y-4'>
-        <h1 class='text-3xl font-medium'>{config.author}</h1>
+        <h1 class='text-3xl font-medium'>{siteTitle}</h1>
         <div class='flex flex-wrap justify-center gap-x-7 gap-y-3'>
           <Label title={`${snapshot.docCount} 篇文档`}>
             <Icon name='document' class='size-5' slot='icon' />
@@ -62,7 +77,7 @@ if (!images[imagePath]) {
           ></span>
           <span class='size-2 rounded-full bg-green-400'></span>
         </span>
-        <p class='font-medium text-muted-foreground'>进入课程文档</p>
+        <p class='font-medium text-muted-foreground'>课程内容持续更新中</p>
       </button>
     </section>
 
@@ -76,7 +91,7 @@ if (!images[imagePath]) {
           {sections.map((section) => (
             <a class='rounded-2xl border p-4 transition-colors hover:bg-muted/20' href={section.href}>
               <p class='text-xl font-semibold'>{section.label}</p>
-              <p class='mt-1 text-sm text-muted-foreground'>{section.count} 篇文章</p>
+              <p class='mt-1 text-sm text-muted-foreground'>{section.count} 篇文档</p>
               {section.firstDoc?.title && (
                 <p class='mt-2 text-sm text-muted-foreground'>建议从这里开始：{section.firstDoc.title}</p>
               )}

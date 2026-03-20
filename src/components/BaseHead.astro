@@ -2,12 +2,29 @@
 import { prod } from 'astro-pure/server'
 import type { SiteMeta } from 'astro-pure/types'
 import config from 'virtual:config'
+import { getSiteBrandingSettings } from '@/lib/server/content.mjs'
 
 type Props = SiteMeta
 
 const { articleDate, description, ogImage, title } = Astro.props
 
-const siteTitle = `${title} ${config.titleDelimiter} ${config.title}`
+function inferFaviconType(href: string, fallbackType = 'image/x-icon') {
+  const normalized = String(href || '')
+  const extension = normalized.split('?')[0].split('#')[0].toLowerCase()
+  if (extension.endsWith('.svg')) return 'image/svg+xml'
+  if (extension.endsWith('.png')) return 'image/png'
+  if (extension.endsWith('.webp')) return 'image/webp'
+  if (extension.endsWith('.jpg') || extension.endsWith('.jpeg')) return 'image/jpeg'
+  if (extension.endsWith('.gif')) return 'image/gif'
+  if (extension.endsWith('.ico')) return 'image/x-icon'
+  return fallbackType
+}
+
+const branding = await getSiteBrandingSettings()
+const siteName = branding.siteTitle || config.title
+const faviconHref = branding.siteFaviconHref || config.favicon.href
+const faviconType = inferFaviconType(faviconHref, config.favicon.type)
+const siteTitle = `${title} ${config.titleDelimiter} ${siteName}`
 const canonicalURL = new URL(Astro.url.pathname, Astro.site)
 const socialImageURL = new URL(ogImage ? ogImage : config.socialCard, Astro.url).href
 ---
@@ -18,8 +35,8 @@ const socialImageURL = new URL(ogImage ? ogImage : config.socialCard, Astro.url)
 <title>{siteTitle}</title>
 
 {/* Icons / Favicon */}
-<link rel='icon' type={config.favicon.type} href={config.favicon.href} />
-<link rel='shortcut icon' type={config.favicon.type} href={config.favicon.href} />
+<link rel='icon' type={faviconType} href={faviconHref} />
+<link rel='shortcut icon' type={faviconType} href={faviconHref} />
 <link rel='icon' type='image/png' sizes='32x32' href='/favicon/favicon-32x32.png' />
 <link rel='icon' type='image/png' sizes='16x16' href='/favicon/favicon-16x16.png' />
 <link rel='apple-touch-icon' sizes='180x180' href='/favicon/apple-touch-icon.png' />
@@ -53,7 +70,7 @@ const socialImageURL = new URL(ogImage ? ogImage : config.socialCard, Astro.url)
 <meta content={title} property='og:title' />
 <meta content={description} property='og:description' />
 <meta content={canonicalURL} property='og:url' />
-<meta content={config.title} property='og:site_name' />
+<meta content={siteName} property='og:site_name' />
 <meta content={config.locale.attrs} property='og:locale' />
 <meta content={socialImageURL} property='og:image' />
 <meta content='1200' property='og:image:width' />
@@ -81,7 +98,7 @@ const socialImageURL = new URL(ogImage ? ogImage : config.socialCard, Astro.url)
 <link
   rel='alternate'
   type='application/rss+xml'
-  title={config.title}
+  title={siteName}
   href={`${Astro.site}rss.xml`}
 />
 

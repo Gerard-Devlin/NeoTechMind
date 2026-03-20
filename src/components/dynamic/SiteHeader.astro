@@ -1,7 +1,7 @@
 ---
 import { Icon } from 'astro-pure/user'
 import config from '@/site-config'
-import { getNavigationState } from '@/lib/server/content.mjs'
+import { getNavigationState, getSiteBrandingSettings } from '@/lib/server/content.mjs'
 
 interface Props {
   pathname?: string
@@ -9,8 +9,9 @@ interface Props {
 
 const { pathname = '/' } = Astro.props
 const navigation = await getNavigationState(pathname)
+const branding = await getSiteBrandingSettings()
 const configuredTitle = String(config.title || '').trim()
-const brandTitle = configuredTitle && configuredTitle.toLowerCase() !== 'bitbuzz' ? configuredTitle : 'NeoTechMind'
+const brandTitle = String(branding.siteTitle || configuredTitle || 'NeoTechMind').trim() || 'NeoTechMind'
 const sections = navigation.sections ?? []
 const items = [
   { title: '首页', link: '/', active: navigation.pathname === '/' },

@@ -1,0 +1,56 @@
+---
+interface TreeFileNode {
+  name: string
+  path: string
+  mimeType: string
+  sizeBytes: number
+  refCount: number
+  updatedAt: string
+}
+
+interface TreeFolderNode {
+  name: string
+  path: string
+  folders: TreeFolderNode[]
+  files: TreeFileNode[]
+}
+
+interface Props {
+  node: TreeFolderNode
+  level?: number
+}
+
+const { node, level = 0 } = Astro.props
+const openByDefault = level < 1
+---
+
+      <li class='attachment-folder' style={`--tree-level:${level};`}>
+  <details class='attachment-folder-details' open={openByDefault}>
+    <summary class='attachment-folder-summary'>
+      <span class='attachment-folder-label'>{node.name}</span>
+    </summary>
+
+    <ul class='attachment-tree-children'>
+      {node.folders.map((child) => (
+        <Astro.self node={child} level={level + 1} />
+      ))}
+
+      {node.files.map((file) => (
+        <li class='attachment-file-row' style={`--tree-level:${level + 1};`}>
+          <button
+            type='button'
+            class='attachment-file-btn'
+            data-file-path={file.path}
+            data-file-name={file.name}
+            data-file-mime={file.mimeType}
+            data-file-size={String(file.sizeBytes)}
+            data-file-ref-count={String(file.refCount)}
+            data-file-updated-at={file.updatedAt}
+          >
+            {file.name}
+          </button>
+        </li>
+      ))}
+    </ul>
+  </details>
+</li>

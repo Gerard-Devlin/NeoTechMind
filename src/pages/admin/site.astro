@@ -1,8 +1,61 @@
 ---
+import { basename, extname } from 'node:path'
+
 import PageLayout from '@/layouts/BaseLayout.astro'
+import config from '@/site-config'
 import { getSessionFromCookies, isAdminSession } from '@/lib/server/auth.mjs'
-import { getHomepageDescription, updateHomepageDescription } from '@/lib/server/content.mjs'
+import {
+  getHomepageDescription,
+  getSiteBrandingSettings,
+  registerUploadedMedia,
+  slugifyText,
+  updateSiteSettings
+} from '@/lib/server/content.mjs'
 import '@/assets/styles/admin.css'
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  '.apng': 'image/apng',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.webp': 'image/webp'
+}
+
+function resolveImageMimeType(file: File) {
+  if (file.type && file.type.startsWith('image/')) return file.type
+  const ext = extname(String(file.name || '')).toLowerCase()
+  return IMAGE_MIME_BY_EXT[ext] || ''
+}
+
+async function saveSiteImage(file: File, prefix: string, actorUserId: number | null) {
+  const originalName = basename(file.name || `${prefix}.png`)
+  const ext = extname(originalName).toLowerCase()
+  const base = originalName.slice(0, Math.max(0, originalName.length - ext.length))
+  const finalName = `${Date.now()}-${slugifyText(prefix)}-${slugifyText(base) || 'image'}${ext || '.png'}`
+  const publicPath = `/uploads/site/${finalName}`
+  const buffer = Buffer.from(await file.arrayBuffer())
+
+  await registerUploadedMedia({
+    contentId: null,
+    filePath: publicPath,
+    originalName,
+    mimeType: resolveImageMimeType(file),
+    sizeBytes: file.size,
+    blobData: buffer,
+    section: 'site',
+    sectionLabel: 'Site',
+    ownerUserId: actorUserId
+  })
+
+  return publicPath
+}
 
 const session = await getSessionFromCookies(Astro.cookies)
 if (!session) {
@@ -14,28 +67,69 @@ if (!isAdminSession(session)) {
 
 let error = ''
 let success = ''
+
+const branding = await getSiteBrandingSettings()
+const defaultFaviconHref = String(config.favicon || '/favicon/favicon.ico')
 let homepageDescription = await getHomepageDescription()
+let siteTitle = branding.siteTitle || config.title
+let siteFaviconHref = branding.siteFaviconHref || defaultFaviconHref
+let homepageLogoSrc = branding.homepageLogoSrc || config.logo.src
 
 if (Astro.request.method === 'POST') {
   const formData = await Astro.request.formData()
-  const nextDescription = String(formData.get('homepageDescription') || '')
+  const nextHomepageDescription = String(formData.get('homepageDescription') || '')
+  const nextSiteTitle = String(formData.get('siteTitle') || '')
+  const faviconFile = formData.get('siteFaviconFile')
+  const homepageLogoFile = formData.get('homepageLogoFile')
+
+  let nextSiteFaviconHref = siteFaviconHref
+  let nextHomepageLogoSrc = homepageLogoSrc
 
   try {
-    homepageDescription = await updateHomepageDescription(nextDescription, session)
-    success = '站点说明已更新。'
+    if (faviconFile instanceof File && faviconFile.size > 0) {
+      const faviconMime = resolveImageMimeType(faviconFile)
+      if (!faviconMime) {
+        throw new Error('Favicon 仅支持图片文件。')
+      }
+      nextSiteFaviconHref = await saveSiteImage(faviconFile, 'favicon', session.userId)
+    }
+
+    if (homepageLogoFile instanceof File && homepageLogoFile.size > 0) {
+      const logoMime = resolveImageMimeType(homepageLogoFile)
+      if (!logoMime) {
+        throw new Error('首页顶部图仅支持图片文件。')
+      }
+      nextHomepageLogoSrc = await saveSiteImage(homepageLogoFile, 'homepage-logo', session.userId)
+    }
+
+    const updated = await updateSiteSettings(
+      {
+        homepageDescription: nextHomepageDescription,
+        siteTitle: nextSiteTitle,
+        siteFaviconHref: nextSiteFaviconHref,
+        homepageLogoSrc: nextHomepageLogoSrc
+      },
+      session
+    )
+
+    homepageDescription = updated.homepageDescription
+    siteTitle = updated.siteTitle
+    siteFaviconHref = updated.siteFaviconHref || defaultFaviconHref
+    homepageLogoSrc = updated.homepageLogoSrc || config.logo.src
+    success = '站点设置已更新。'
   } catch (cause) {
     error = cause instanceof Error ? cause.message : '保存失败。'
   }
 }
 ---
 
-<PageLayout meta={{ title: '站点设置', description: 'Manage homepage settings' }} containerClass='max-w-[96rem]'>
+<PageLayout meta={{ title: '站点设置', description: 'Manage site settings' }} containerClass='max-w-[96rem]'>
   <main class='admin-page py-7 md:py-8'>
     <section class='admin-top'>
       <div>
         <p class='admin-kicker'>Admin</p>
         <h1 class='admin-title'>站点设置</h1>
-        <p class='admin-desc'>仅管理员可修改首页站点说明。</p>
+        <p class='admin-desc'>支持修改站点名称、首页说明，并直接上传 favicon 与首页顶部图。</p>
       </div>
       <div class='admin-toolbar'>
         <a class='admin-btn' href='/admin'>返回后台</a>
@@ -46,7 +140,31 @@ if (Astro.request.method === 'POST') {
     {success && <p class='admin-alert admin-alert-success'>{success}</p>}
 
     <section class='admin-card mt-6 p-5 md:p-6'>
-      <form class='flex flex-col gap-4' method='post'>
+      <form class='flex flex-col gap-4' method='post' enctype='multipart/form-data'>
+        <label class='admin-label'>
+          <span>站点名称</span>
+          <input
+            class='admin-input'
+            type='text'
+            name='siteTitle'
+            maxlength='120'
+            required
+            value={siteTitle}
+          />
+        </label>
+
+        <label class='admin-label'>
+          <span>上传 Favicon（可选）</span>
+          <input class='admin-input' type='file' name='siteFaviconFile' accept='image/*' />
+          <p class='admin-muted text-xs'>当前：<code>{siteFaviconHref}</code></p>
+        </label>
+
+        <label class='admin-label'>
+          <span>上传首页顶部图（可选）</span>
+          <input class='admin-input' type='file' name='homepageLogoFile' accept='image/*' />
+          <p class='admin-muted text-xs'>当前：<code>{homepageLogoSrc}</code></p>
+        </label>
+
         <label class='admin-label'>
           <span>首页站点说明</span>
           <textarea
@@ -57,6 +175,7 @@ if (Astro.request.method === 'POST') {
             required
           >{homepageDescription}</textarea>
         </label>
+
         <div class='admin-toolbar'>
           <button class='admin-btn admin-btn-primary' type='submit'>保存设置</button>
           <a class='admin-btn' href='/'>查看首页</a>
@@ -65,4 +184,3 @@ if (Astro.request.method === 'POST') {
     </section>
   </main>
 </PageLayout>
-

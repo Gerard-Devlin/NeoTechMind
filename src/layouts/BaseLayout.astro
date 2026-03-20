@@ -1,7 +1,8 @@
 ---
-import { Footer, ThemeProvider } from 'astro-pure/components/basic'
+import { ThemeProvider } from 'astro-pure/components/basic'
 import type { SiteMeta } from 'astro-pure/types'
 import BaseHead from '@/components/BaseHead.astro'
+import SiteFooter from '@/components/dynamic/SiteFooter.astro'
 import SiteHeader from '@/components/dynamic/SiteHeader.astro'
 import config from '@/site-config'
 
@@ -102,7 +103,7 @@ const pathname = Astro.url.pathname
         <slot />
       </div>
 
-      <Footer />
+      <SiteFooter />
     </div>
 
     <style define:vars={{ highlightColor }}>
