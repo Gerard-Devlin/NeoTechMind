@@ -46,3 +46,7 @@ a {
     color: hsl(var(--primary) / var(--un-text-opacity, 1));
   }
 }
+
+#action-buttons {
+  z-index: 80 !important;
+}

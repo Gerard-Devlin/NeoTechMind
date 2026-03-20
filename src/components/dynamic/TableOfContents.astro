@@ -15,25 +15,130 @@ const { headings } = Astro.props
 
 {
   headings.length > 0 && (
-    <nav class='not-prose rounded-2xl border bg-muted/30 p-4'>
-      <h2 class='text-sm font-semibold tracking-wide text-muted-foreground uppercase'>目录</h2>
-      <ul class='mt-3 flex flex-col gap-2'>
+    <toc-heading class='not-prose rounded-2xl border bg-muted/30 p-4'>
+      <h2 class='font-medium'>TABLE OF CONTENTS</h2>
+      <ul class='mt-4'>
         {headings.map((heading) => (
-          <li style={`padding-left:${(heading.depth - 1) * 0.75}rem`}>
-            {heading.html ? (
-              <a
-                class='text-sm text-foreground/80 hover:text-foreground'
-                href={`#${heading.slug}`}
-                set:html={heading.html}
-              ></a>
-            ) : (
-              <a class='text-sm text-foreground/80 hover:text-foreground' href={`#${heading.slug}`}>
-                {heading.text}
-              </a>
-            )}
+          <li>
+            <div class='relative'>
+              <span class='absolute top-[5%] w-[2px] rounded transition-colors duration-300 [&.highlight-bg]:bg-primary [&.is-read]:bg-border'></span>
+              {heading.html ? (
+                <a
+                  class={`toc-item line-clamp-2 px-3 py-1 ms-2 text-foreground/75 transition-all hover:text-foreground [&.highlight]:font-medium [&.highlight]:text-primary [&.highlight-bg-translucent]:bg-muted${heading.depth > 2 ? ' ps-7' : ''}`}
+                  href={`#${heading.slug}`}
+                  set:html={heading.html}
+                ></a>
+              ) : (
+                <a
+                  aria-label={`Scroll to section: ${heading.text}`}
+                  class={`toc-item line-clamp-2 px-3 py-1 ms-2 text-foreground/75 transition-all hover:text-foreground [&.highlight]:font-medium [&.highlight]:text-primary [&.highlight-bg-translucent]:bg-muted${heading.depth > 2 ? ' ps-7' : ''}`}
+                  href={`#${heading.slug}`}
+                >
+                  {heading.text}
+                </a>
+              )}
+            </div>
           </li>
         ))}
       </ul>
-    </nav>
+    </toc-heading>
   )
 }
+
+<script>
+  interface TOCLink {
+    element: HTMLAnchorElement
+    progressBar: HTMLElement
+    slug: string
+  }
+
+  interface HeadingProgress {
+    inView: boolean
+    progress: number
+  }
+
+  class TOC extends HTMLElement {
+    headings: HTMLElement[] = []
+    tocLinks: TOCLink[] = []
+    headingProgress: Record<string, HeadingProgress> = {}
+
+    constructor() {
+      super()
+      this.headings = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          'article h1[id], article h2[id], article h3[id], article h4[id], article h5[id], article h6[id]'
+        )
+      )
+      this.tocLinks = Array.from(this.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')).map((link) => ({
+        element: link,
+        progressBar: link.previousElementSibling as HTMLElement,
+        slug: (link.getAttribute('href') || '').substring(1)
+      }))
+    }
+
+    updatePositionAndStyle = () => {
+      const windowHeight = window.innerHeight
+      const pageOffset =
+        window.scrollY - ((document.querySelector<HTMLElement>('#content') as HTMLElement)?.offsetTop || 0)
+      const postOffset =
+        ((document.querySelector<HTMLElement>('#content') as HTMLElement)?.offsetHeight || 0) + 127
+
+      this.headings.forEach((el, index) => {
+        const nextHeadingTop = this.headings[index + 1]?.offsetTop || postOffset
+        const range = [el.offsetTop - pageOffset, nextHeadingTop - pageOffset - el.offsetHeight]
+        const progress = (windowHeight - range[0]) / (range[1] - range[0])
+
+        this.headingProgress[el.id] = {
+          inView: range[0] < windowHeight && range[1] > 0,
+          progress: Math.max(0, Math.min(1, progress))
+        }
+      })
+
+      this.tocLinks.forEach(({ element: el, progressBar: bar, slug }, i) => {
+        const state = this.headingProgress[slug]
+        if (!state) return
+
+        const { inView, progress } = state
+        el.classList.toggle('highlight', inView)
+        el.classList.toggle('highlight-bg-translucent', inView)
+        el.classList.toggle(
+          'rounded-t-2xl',
+          inView && (i === 0 || !this.headingProgress[this.tocLinks[i - 1]?.slug].inView)
+        )
+        el.classList.toggle(
+          'rounded-b-2xl',
+          inView &&
+            (i === this.tocLinks.length - 1 || !this.headingProgress[this.tocLinks[i + 1]?.slug].inView)
+        )
+        bar.classList.toggle('is-read', !inView && progress === 1)
+        bar.classList.toggle('highlight-bg', inView)
+        bar.style.setProperty('height', `${progress * 90}%`)
+      })
+    }
+
+    connectedCallback() {
+      this.tocLinks.forEach((link) => {
+        link.element.addEventListener('click', (e) => {
+          e.preventDefault()
+          const directHeading = this.headings.find((heading) => heading.id === link.slug)
+          if (!directHeading) return
+          history.pushState(null, directHeading.textContent || '', link.element.getAttribute('href'))
+          directHeading.scrollIntoView({ behavior: 'smooth' })
+        })
+      })
+
+      setInterval(this.updatePositionAndStyle, 100)
+      window.addEventListener('scroll', this.updatePositionAndStyle)
+    }
+  }
+
+  if (!customElements.get('toc-heading')) {
+    customElements.define('toc-heading', TOC)
+  }
+</script>
+
+<style>
+  toc-heading :global(.toc-item) {
+    display: flow-root;
+  }
+</style>
