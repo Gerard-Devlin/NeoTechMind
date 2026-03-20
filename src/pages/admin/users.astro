@@ -7,6 +7,7 @@ import {
   isAdminSession,
   listAdminUsers,
   setAdminUserActive,
+  updateAdminUserPassword,
   updateAdminUserRole
 } from '@/lib/server/auth.mjs'
 import '@/assets/styles/admin.css'
@@ -24,6 +25,10 @@ let error = ''
 let success = ''
 let username = ''
 let role: 'admin' | 'editor' = 'editor'
+let openCreateModal = false
+let openPasswordModal = false
+let passwordTargetUserId = ''
+let passwordTargetUsername = ''
 
 if (Astro.request.method === 'POST') {
   const formData = await Astro.request.formData()
@@ -38,6 +43,7 @@ if (Astro.request.method === 'POST') {
       success = `用户 ${username} 创建成功。`
       username = ''
       role = 'editor'
+      openCreateModal = false
     } else if (intent === 'toggle-active') {
       const targetUserId = Number(formData.get('targetUserId') || 0)
       const nextActive = String(formData.get('nextActive') || '0') === '1'
@@ -63,156 +69,553 @@ if (Astro.request.method === 'POST') {
         actorUserId: session.userId
       })
       success = '用户已删除。'
+    } else if (intent === 'update-password') {
+      const targetUserId = Number(formData.get('targetUserId') || 0)
+      const targetUsername = String(formData.get('targetUsername') || '').trim()
+      const password = String(formData.get('password') || '')
+      const confirmPassword = String(formData.get('confirmPassword') || '')
+
+      if (!targetUserId) throw new Error('无效的用户。')
+      if (!targetUsername) throw new Error('用户信息缺失。')
+      if (password !== confirmPassword) throw new Error('两次输入的密码不一致。')
+
+      await updateAdminUserPassword({ targetUserId, password })
+      success = `用户 ${targetUsername} 的密码已更新。`
+      openPasswordModal = false
+      passwordTargetUserId = ''
+      passwordTargetUsername = ''
     }
   } catch (cause) {
     error = cause instanceof Error ? cause.message : '操作失败。'
+    if (intent === 'create') {
+      openCreateModal = true
+    } else if (intent === 'update-password') {
+      openPasswordModal = true
+      passwordTargetUserId = String(formData.get('targetUserId') || '').trim()
+      passwordTargetUsername = String(formData.get('targetUsername') || '').trim()
+    }
   }
 }
 
 const users = await listAdminUsers()
+const activeCount = users.filter((user: any) => Boolean(user.is_active)).length
 ---
 
 <PageLayout meta={{ title: '用户管理', description: 'Manage admin users' }} containerClass='max-w-[96rem]'>
   <main class='admin-page py-7 md:py-8'>
     <section class='admin-card p-7 md:p-8'>
-      <p class='admin-kicker'>Admin</p>
-      <h1 class='admin-title'>用户管理</h1>
-      <p class='admin-desc'>管理员可创建用户、封禁/解封账号、调整角色和删除账号。</p>
+      <div class='admin-top'>
+        <div>
+          <p class='admin-kicker'>Admin</p>
+          <h1 class='admin-title'>用户管理</h1>
+          <p class='admin-desc'>统一管理后台账号权限与状态，操作保持简洁可控。</p>
+        </div>
+
+        <div class='admin-toolbar'>
+          <button id='open-create-user' class='admin-btn admin-btn-primary' type='button'>添加用户</button>
+          <a class='admin-btn' href='/admin'>返回后台</a>
+        </div>
+      </div>
 
       {error && <p class='admin-alert admin-alert-error'>{error}</p>}
       {success && <p class='admin-alert admin-alert-success'>{success}</p>}
 
-      <form class='mt-6 grid gap-4 md:max-w-3xl md:grid-cols-4' method='post'>
-        <input name='intent' type='hidden' value='create' />
-
-        <label class='admin-label md:col-span-1'>
-          <span>用户名</span>
-          <input class='admin-input' name='username' value={username} required />
-        </label>
-
-        <label class='admin-label md:col-span-1'>
-          <span>密码</span>
-          <input class='admin-input' name='password' type='password' minlength='6' required />
-        </label>
-
-        <label class='admin-label md:col-span-1'>
-          <span>角色</span>
-          <select class='admin-input' name='role'>
-            <option value='editor' selected={role === 'editor'}>普通用户</option>
-            <option value='admin' selected={role === 'admin'}>管理员</option>
-          </select>
-        </label>
-
-        <div class='admin-toolbar items-end md:col-span-1'>
-          <button class='admin-btn admin-btn-primary' type='submit'>创建用户</button>
-        </div>
-      </form>
-    </section>
-
-    <section class='admin-card mt-6 p-7 md:p-8'>
-      <div class='mb-4 flex items-center justify-between gap-3'>
-        <h2 class='text-2xl font-semibold'>现有用户</h2>
-        <a class='admin-btn' href='/admin'>返回后台</a>
+      <div class='admin-note mt-5'>
+        共 {users.length} 个用户，已启用 {activeCount} 个，已封禁 {Math.max(0, users.length - activeCount)} 个。
       </div>
-
-      <ul class='admin-list'>
-        {
-          users.map((user: any) => {
-            const isCurrent = Number(user.id) === Number(session.userId)
-            const isActive = Boolean(user.is_active)
-
-            return (
-              <li class='admin-list-item'>
-                <div class='flex flex-wrap items-start justify-between gap-3'>
-                  <div>
-                    <p class='font-medium'>
-                      {user.username}
-                      {isCurrent && <span class='ml-2 rounded-full border px-2 py-0.5 text-xs'>当前账号</span>}
-                      {!isActive && <span class='ml-2 rounded-full border border-red-500/60 px-2 py-0.5 text-xs text-red-500'>已封禁</span>}
-                    </p>
-                    <p class='mt-1 text-sm text-muted-foreground'>
-                      角色：{user.role === 'admin' ? '管理员' : '普通用户'}
-                    </p>
-                    <p class='mt-1 text-xs text-muted-foreground'>
-                      创建于：{new Date(user.created_at).toLocaleString('zh-CN')}
-                    </p>
-                  </div>
-
-                  <div class='admin-actions-cluster user-actions-grid'>
-                    <form class='user-role-form' method='post'>
-                      <input name='intent' type='hidden' value='set-role' />
-                      <input name='targetUserId' type='hidden' value={String(user.id)} />
-                      <div class='user-role-controls'>
-                        <select class='user-role-select' name='role' value={user.role}>
-                          <option value='editor'>普通用户</option>
-                          <option value='admin'>管理员</option>
-                        </select>
-                        <button class='admin-btn admin-btn-primary admin-btn-sm user-role-submit' type='submit'>
-                          保存角色
-                        </button>
-                      </div>
-                    </form>
-
-                    <form method='post'>
-                      <input name='intent' type='hidden' value='toggle-active' />
-                      <input name='targetUserId' type='hidden' value={String(user.id)} />
-                      <input name='nextActive' type='hidden' value={isActive ? '0' : '1'} />
-                      <button class='admin-btn admin-btn-sm' type='submit'>
-                        {isActive ? '封禁' : '解封'}
-                      </button>
-                    </form>
-
-                    <form
-                      method='post'
-                      onsubmit={`return confirm('确认删除用户「${user.username}」？该操作不可恢复。')`}
-                    >
-                      <input name='intent' type='hidden' value='delete-user' />
-                      <input name='targetUserId' type='hidden' value={String(user.id)} />
-                      <button class='admin-btn admin-btn-sm admin-btn-danger' type='submit'>删除</button>
-                    </form>
-                  </div>
-                </div>
-              </li>
-            )
-          })
-        }
-      </ul>
     </section>
+
+    <section class='admin-card mt-6 overflow-hidden'>
+      <div class='users-table-wrap'>
+        <table class='users-table'>
+          <thead>
+            <tr>
+              <th>用户名</th>
+              <th>角色</th>
+              <th>状态</th>
+              <th class='users-ops-head'>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              users.map((user: any) => {
+                const isCurrent = Number(user.id) === Number(session.userId)
+                const isActive = Boolean(user.is_active)
+                const willBeAdmin = user.role !== 'admin'
+
+                return (
+                  <tr>
+                    <td>
+                      <div class='user-name-wrap'>
+                        <p class='user-name'>{user.username}</p>
+                        <p class='user-meta'>创建于：{new Date(user.created_at).toLocaleString('zh-CN')}</p>
+                      </div>
+                    </td>
+
+                    <td>
+                      <span
+                        class:list={[
+                          'user-badge',
+                          user.role === 'admin' ? 'user-badge-role-admin' : 'user-badge-role-editor',
+                          isCurrent && user.role === 'admin' && 'user-badge-role-owner'
+                        ]}
+                      >
+                        {isCurrent && user.role === 'admin'
+                          ? '站长'
+                          : user.role === 'admin'
+                            ? '管理员'
+                            : '普通用户'}
+                      </span>
+                    </td>
+
+                    <td>
+                      <span class:list={['user-badge', isActive ? 'user-badge-status-on' : 'user-badge-status-off']}>
+                        {isActive ? '正常' : '已封禁'}
+                      </span>
+                    </td>
+
+                    <td class='users-actions-cell'>
+                      {
+                        isCurrent ? (
+                          <div class='admin-actions-cluster users-actions'>
+                            <span class='current-tip'>当前账号</span>
+                            <button
+                              class='admin-btn admin-btn-sm users-action users-action-pass'
+                              type='button'
+                              data-open-password
+                              data-user-id={String(user.id)}
+                              data-username={user.username}
+                            >
+                              修改密码
+                            </button>
+                          </div>
+                        ) : (
+                          <div class='admin-actions-cluster users-actions'>
+                            <button
+                              class='admin-btn admin-btn-sm users-action users-action-pass'
+                              type='button'
+                              data-open-password
+                              data-user-id={String(user.id)}
+                              data-username={user.username}
+                            >
+                              修改密码
+                            </button>
+
+                            <form method='post'>
+                              <input name='intent' type='hidden' value='set-role' />
+                              <input name='targetUserId' type='hidden' value={String(user.id)} />
+                              <input name='role' type='hidden' value={willBeAdmin ? 'admin' : 'editor'} />
+                              <button class='admin-btn admin-btn-sm users-action users-action-role' type='submit'>
+                                {willBeAdmin ? '设为管理员' : '取消管理员'}
+                              </button>
+                            </form>
+
+                            <form method='post'>
+                              <input name='intent' type='hidden' value='toggle-active' />
+                              <input name='targetUserId' type='hidden' value={String(user.id)} />
+                              <input name='nextActive' type='hidden' value={isActive ? '0' : '1'} />
+                              <button class='admin-btn admin-btn-sm users-action users-action-lock' type='submit'>
+                                {isActive ? '封禁' : '解封'}
+                              </button>
+                            </form>
+
+                            <form
+                              method='post'
+                              onsubmit={`return confirm('确认删除用户「${user.username.replace(/'/g, "\\'")}」？此操作不可恢复。')`}
+                            >
+                              <input name='intent' type='hidden' value='delete-user' />
+                              <input name='targetUserId' type='hidden' value={String(user.id)} />
+                              <button class='admin-btn admin-btn-sm admin-btn-danger users-action' type='submit'>
+                                删除用户
+                              </button>
+                            </form>
+                          </div>
+                        )
+                      }
+                    </td>
+                  </tr>
+                )
+              })
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div id='create-user-modal' class:list={['admin-modal', openCreateModal && 'is-open']} aria-hidden='true'>
+      <button class='admin-modal-backdrop' type='button' data-modal-close aria-label='关闭弹窗'></button>
+
+      <section class='admin-modal-panel admin-card' role='dialog' aria-modal='true' aria-labelledby='create-user-title'>
+        <div class='admin-modal-head'>
+          <h2 id='create-user-title' class='text-xl font-semibold'>添加用户</h2>
+        </div>
+
+        <form method='post' class='admin-modal-form'>
+          <input name='intent' type='hidden' value='create' />
+
+          <label class='admin-label'>
+            <span>用户名</span>
+            <input id='create-username' class='admin-input' name='username' value={username} required />
+          </label>
+
+          <label class='admin-label'>
+            <span>密码</span>
+            <input class='admin-input' name='password' type='password' minlength='6' required />
+          </label>
+
+          <label class='admin-label'>
+            <span>角色</span>
+            <select class='admin-input' name='role'>
+              <option value='editor' selected={role === 'editor'}>普通用户</option>
+              <option value='admin' selected={role === 'admin'}>管理员</option>
+            </select>
+          </label>
+
+          <div class='admin-toolbar mt-2 justify-end'>
+            <button class='admin-btn' type='button' data-modal-close>取消</button>
+            <button class='admin-btn admin-btn-primary' type='submit'>创建用户</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div
+      id='update-password-modal'
+      class:list={['admin-modal', openPasswordModal && 'is-open']}
+      aria-hidden='true'
+    >
+      <button class='admin-modal-backdrop' type='button' data-modal-close aria-label='关闭弹窗'></button>
+
+      <section class='admin-modal-panel admin-card' role='dialog' aria-modal='true' aria-labelledby='password-modal-title'>
+        <div class='admin-modal-head'>
+          <h2 id='password-modal-title' class='text-xl font-semibold'>修改密码</h2>
+        </div>
+
+        <form method='post' class='admin-modal-form'>
+          <input name='intent' type='hidden' value='update-password' />
+          <input id='password-target-user-id' name='targetUserId' type='hidden' value={passwordTargetUserId} />
+          <input id='password-target-username' name='targetUsername' type='hidden' value={passwordTargetUsername} />
+
+          <p class='text-sm text-muted-foreground'>
+            正在修改：<span id='password-target-label' class='font-medium text-foreground'>{passwordTargetUsername || '未选择用户'}</span>
+          </p>
+
+          <label class='admin-label'>
+            <span>新密码</span>
+            <input id='password-input' class='admin-input' name='password' type='password' minlength='6' required />
+          </label>
+
+          <label class='admin-label'>
+            <span>确认新密码</span>
+            <input class='admin-input' name='confirmPassword' type='password' minlength='6' required />
+          </label>
+
+          <div class='admin-toolbar mt-2 justify-end'>
+            <button class='admin-btn' type='button' data-modal-close>取消</button>
+            <button class='admin-btn admin-btn-primary' type='submit'>保存新密码</button>
+          </div>
+        </form>
+      </section>
+    </div>
   </main>
 </PageLayout>
 
+<script
+  is:inline
+  define:vars={{ openCreateModal, openPasswordModal, passwordTargetUserId, passwordTargetUsername }}
+>
+  (() => {
+    const createModal = document.getElementById('create-user-modal')
+    const passwordModal = document.getElementById('update-password-modal')
+    if (!(createModal instanceof HTMLElement) || !(passwordModal instanceof HTMLElement)) return
+
+    const createOpenBtn = document.getElementById('open-create-user')
+    const createUsernameInput = createModal.querySelector('#create-username')
+    const passwordInput = passwordModal.querySelector('#password-input')
+    const passwordTargetUserInput = passwordModal.querySelector('#password-target-user-id')
+    const passwordTargetUsernameInput = passwordModal.querySelector('#password-target-username')
+    const passwordTargetLabel = passwordModal.querySelector('#password-target-label')
+
+    const syncBodyLock = () => {
+      const anyOpen = document.querySelector('.admin-modal.is-open')
+      document.body.classList.toggle('admin-modal-open', Boolean(anyOpen))
+    }
+
+    const setOpen = (modal, open) => {
+      modal.classList.toggle('is-open', open)
+      modal.setAttribute('aria-hidden', open ? 'false' : 'true')
+      syncBodyLock()
+    }
+
+    const closeModal = (modal) => setOpen(modal, false)
+
+    const openCreateModalWithFocus = () => {
+      setOpen(createModal, true)
+      window.setTimeout(() => {
+        if (createUsernameInput instanceof HTMLInputElement) createUsernameInput.focus()
+      }, 10)
+    }
+
+    const openPasswordModalWithUser = (userId, username) => {
+      if (passwordTargetUserInput instanceof HTMLInputElement) {
+        passwordTargetUserInput.value = userId
+      }
+      if (passwordTargetUsernameInput instanceof HTMLInputElement) {
+        passwordTargetUsernameInput.value = username
+      }
+      if (passwordTargetLabel) {
+        passwordTargetLabel.textContent = username || '未选择用户'
+      }
+      setOpen(passwordModal, true)
+      window.setTimeout(() => {
+        if (passwordInput instanceof HTMLInputElement) {
+          passwordInput.value = ''
+          passwordInput.focus()
+        }
+      }, 10)
+    }
+
+    createOpenBtn?.addEventListener('click', () => openCreateModalWithFocus())
+
+    document.querySelectorAll('[data-open-password]').forEach((node) => {
+      node.addEventListener('click', () => {
+        const button = node
+        if (!(button instanceof HTMLElement)) return
+        const userId = button.getAttribute('data-user-id') || ''
+        const targetUsername = button.getAttribute('data-username') || ''
+        if (!userId) return
+        openPasswordModalWithUser(userId, targetUsername)
+      })
+    })
+
+    createModal.querySelectorAll('[data-modal-close]').forEach((node) => {
+      node.addEventListener('click', () => closeModal(createModal))
+    })
+
+    passwordModal.querySelectorAll('[data-modal-close]').forEach((node) => {
+      node.addEventListener('click', () => closeModal(passwordModal))
+    })
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        if (passwordModal.classList.contains('is-open')) {
+          closeModal(passwordModal)
+          return
+        }
+        if (createModal.classList.contains('is-open')) {
+          closeModal(createModal)
+        }
+      }
+    })
+
+    if (openCreateModal) {
+      openCreateModalWithFocus()
+    }
+
+    if (openPasswordModal) {
+      openPasswordModalWithUser(passwordTargetUserId || '', passwordTargetUsername || '')
+    }
+  })()
+</script>
+
 <style>
-  .user-role-form {
-    display: inline-flex;
+  .users-table-wrap {
+    overflow-x: auto;
   }
 
-  .user-role-controls {
+  .users-table {
+    width: 100%;
+    min-width: 50rem;
+    border-collapse: collapse;
+  }
+
+  .users-table th {
+    text-align: left;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.25);
+    border-bottom: 1px solid hsl(var(--border));
+    padding: 0.9rem 1rem;
+    white-space: nowrap;
+  }
+
+  .users-table td {
+    border-bottom: 1px solid hsl(var(--border) / 0.86);
+    padding: 0.95rem 1rem;
+    vertical-align: middle;
+  }
+
+  .users-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .users-table th.users-ops-head {
+    text-align: right;
+  }
+
+  .users-actions-cell {
+    text-align: right;
+  }
+
+  .user-name-wrap {
+    min-width: 11rem;
+  }
+
+  .user-name {
+    font-size: 1.02rem;
+    font-weight: 620;
+  }
+
+  .user-meta {
+    margin-top: 0.15rem;
+    font-size: 0.74rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .user-badge {
     display: inline-flex;
     align-items: center;
-    gap: 0.42rem;
-    border: 1px solid hsl(var(--border));
+    justify-content: center;
     border-radius: 999px;
-    background: hsl(var(--background));
-    padding: 0.22rem;
-  }
-
-  .user-role-select {
-    min-width: 8.2rem;
-    height: 2rem;
-    border: none;
-    border-radius: 999px;
-    background: transparent;
-    padding: 0 0.78rem;
-    font-size: 0.82rem;
-    line-height: 1.2;
-    outline: none;
-  }
-
-  .user-role-submit {
-    height: 2rem;
-    padding: 0 0.85rem;
-    font-size: 0.78rem;
+    padding: 0.3rem 0.72rem;
+    font-size: 0.76rem;
     font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
   }
 
+  .user-badge-role-owner {
+    color: hsl(41 80% 42%);
+    background: hsl(41 95% 89%);
+    border: 1px solid hsl(41 88% 75%);
+  }
+
+  .user-badge-role-admin {
+    color: hsl(268 78% 48%);
+    background: hsl(267 85% 91%);
+    border: 1px solid hsl(266 76% 82%);
+  }
+
+  .user-badge-role-editor {
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted));
+    border: 1px solid hsl(var(--border));
+  }
+
+  .user-badge-status-on {
+    color: hsl(223 78% 43%);
+    background: hsl(220 92% 93%);
+    border: 1px solid hsl(220 88% 84%);
+  }
+
+  .user-badge-status-off {
+    color: hsl(356 58% 44%);
+    background: hsl(357 82% 94%);
+    border: 1px solid hsl(357 70% 84%);
+  }
+
+  .users-actions {
+    justify-content: flex-end;
+    white-space: nowrap;
+  }
+
+  .users-action {
+    min-width: 4.8rem;
+  }
+
+  .users-action-role {
+    border-color: hsl(265 65% 75%);
+    color: hsl(267 72% 44%);
+    background: hsl(266 92% 96%);
+  }
+
+  .users-action-role:hover {
+    border-color: hsl(265 64% 66%);
+    background: hsl(267 85% 93%);
+  }
+
+  .users-action-pass {
+    border-color: hsl(223 68% 76%);
+    color: hsl(223 68% 42%);
+    background: hsl(223 90% 95%);
+  }
+
+  .users-action-pass:hover {
+    border-color: hsl(223 66% 68%);
+    background: hsl(223 90% 92%);
+  }
+
+  .users-action-lock {
+    border-color: hsl(220 70% 76%);
+    color: hsl(220 72% 44%);
+    background: hsl(221 100% 96%);
+  }
+
+  .users-action-lock:hover {
+    border-color: hsl(220 65% 68%);
+    background: hsl(221 82% 93%);
+  }
+
+  .current-tip {
+    font-size: 0.8rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .admin-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .admin-modal.is-open {
+    display: flex;
+  }
+
+  .admin-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    border: none;
+    background: rgb(2 6 23 / 0.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    cursor: pointer;
+  }
+
+  .admin-modal-panel {
+    position: relative;
+    width: min(32rem, calc(100vw - 2rem));
+    padding: 1rem;
+    z-index: 1;
+  }
+
+  .admin-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-bottom: 1px solid hsl(var(--border));
+    padding: 0.2rem 0.2rem 0.9rem;
+    margin-bottom: 0.9rem;
+  }
+
+  .admin-modal-form {
+    display: grid;
+    gap: 0.8rem;
+    padding: 0.2rem;
+  }
+
+  :global(body.admin-modal-open) {
+    overflow: hidden;
+  }
+
+  @media (max-width: 860px) {
+    .users-table {
+      min-width: 42rem;
+    }
+  }
 </style>

@@ -22,14 +22,14 @@ if (Astro.request.method === 'POST') {
 
   try {
     homepageDescription = await updateHomepageDescription(nextDescription, session)
-    success = '站点说明已更新'
+    success = '站点说明已更新。'
   } catch (cause) {
-    error = cause instanceof Error ? cause.message : '保存失败'
+    error = cause instanceof Error ? cause.message : '保存失败。'
   }
 }
 ---
 
-<PageLayout meta={{ title: '站点设置', description: 'Manage homepage settings' }} containerClass='max-w-[70rem]'>
+<PageLayout meta={{ title: '站点设置', description: 'Manage homepage settings' }} containerClass='max-w-[96rem]'>
   <main class='admin-page py-7 md:py-8'>
     <section class='admin-top'>
       <div>
@@ -65,3 +65,4 @@ if (Astro.request.method === 'POST') {
     </section>
   </main>
 </PageLayout>
+

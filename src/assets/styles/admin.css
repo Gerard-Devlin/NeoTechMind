@@ -148,6 +148,39 @@
   background: hsl(0 100% 96%);
 }
 
+.admin-btn-success {
+  border-color: hsl(148 50% 70%);
+  color: hsl(148 62% 31%);
+  background: hsl(146 58% 95%);
+}
+
+.admin-btn-success:hover {
+  border-color: hsl(148 56% 55%);
+  background: hsl(146 56% 91%);
+}
+
+.dark .admin-btn-danger {
+  border-color: hsl(0 56% 40%);
+  color: hsl(0 82% 78%);
+  background: hsl(0 32% 18%);
+}
+
+.dark .admin-btn-danger:hover {
+  border-color: hsl(0 64% 52%);
+  background: hsl(0 36% 23%);
+}
+
+.dark .admin-btn-success {
+  border-color: hsl(148 44% 37%);
+  color: hsl(148 68% 76%);
+  background: hsl(148 30% 18%);
+}
+
+.dark .admin-btn-success:hover {
+  border-color: hsl(148 54% 49%);
+  background: hsl(148 34% 23%);
+}
+
 .admin-input {
   width: 100%;
   border: 1px solid hsl(var(--border));

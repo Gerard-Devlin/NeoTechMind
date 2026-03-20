@@ -1113,23 +1113,40 @@ export async function getAdminDashboardData(actor) {
         label: doc.section_label || 'Uncategorized',
         docs: [],
         updatedAt: doc.updated_at,
-        sortOrder: sectionMap.get(key)?.sort_order ?? null
+        sortOrder: sectionMap.get(key)?.sort_order ?? null,
+        publishedCount: 0,
+        draftCount: 0
       })
     }
 
     const course = courses.get(key)
     course.docs.push(doc)
+    if (doc.status === 'published') {
+      course.publishedCount += 1
+    } else {
+      course.draftCount += 1
+    }
     if (new Date(doc.updated_at).getTime() > new Date(course.updatedAt).getTime()) {
       course.updatedAt = doc.updated_at
     }
   }
 
-  return [...courses.values()].sort((left, right) =>
-    compareSectionRecords(
+  const courseList = [...courses.values()].map((course) => ({
+    ...course,
+    isFullyHidden: course.publishedCount === 0 && course.draftCount > 0,
+    isFullyVisible: course.draftCount === 0 && course.publishedCount > 0
+  }))
+
+  return courseList.sort((left, right) => {
+    if (left.isFullyHidden !== right.isFullyHidden) {
+      return left.isFullyHidden ? 1 : -1
+    }
+
+    return compareSectionRecords(
       { key: left.key, label: left.label, sort_order: left.sortOrder },
       { key: right.key, label: right.label, sort_order: right.sortOrder }
     )
-  )
+  })
 }
 
 export async function getContentById(id, actor) {

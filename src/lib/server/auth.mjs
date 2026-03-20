@@ -241,6 +241,26 @@ export async function createAdminUser(input) {
   )
 }
 
+export async function updateAdminUserPassword(input) {
+  await ensureBootstrapAdminUser()
+  const targetUserId = Number(input?.targetUserId)
+  const password = String(input?.password || '')
+
+  if (!Number.isFinite(targetUserId)) throw new Error('无效的用户。')
+  if (password.length < 6) throw new Error('密码至少 6 位。')
+
+  const target = await getAdminUserById(targetUserId)
+  if (!target) throw new Error('用户不存在。')
+
+  await dbRun(
+    `UPDATE admin_users
+     SET password_hash = ?,
+         updated_at = ?
+     WHERE id = ?`,
+    [hashPassword(password), nowIso(), target.id]
+  )
+}
+
 async function getAdminUserById(userId) {
   const safeId = Number(userId)
   if (!Number.isFinite(safeId)) return null

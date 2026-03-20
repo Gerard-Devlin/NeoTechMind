@@ -44,17 +44,11 @@ function buildNewDocHref(courseLabel = '') {
         <a class='admin-btn admin-btn-primary' href='/admin/new'>新建文章</a>
         {isAdmin && <a class='admin-btn' href='/admin/site'>站点设置</a>}
         {isAdmin && <a class='admin-btn' href='/admin/users'>用户管理</a>}
-        <a class='admin-btn' href='/admin/uploads'>上传图片</a>
         <a class='admin-btn' href='/admin/logout'>退出登录</a>
       </div>
     </section>
 
-    <div class='admin-note mt-5 flex flex-wrap items-center justify-between gap-3'>
-      <p>
-        {isAdmin
-          ? '管理员可以拖拽调整课程顺序，也可以调整课程内文档顺序。'
-          : '普通用户仅能管理自己创建的文档；全局课程排序仅管理员可修改。'}
-      </p>
+    <div id='admin-reorder-note' class='admin-note mt-5 hidden flex-wrap items-center justify-end gap-3'>
       <p id='admin-reorder-status' aria-live='polite'></p>
     </div>
 
@@ -78,15 +72,19 @@ function buildNewDocHref(courseLabel = '') {
             <ul id='course-list' class='admin-course-list' data-active-course={activeCourseKey}>
               {courses.map((course: any) => (
                 <li
-                  class='admin-course-item'
+                  class:list={['admin-course-item', course.isFullyHidden && 'is-fully-hidden']}
                   data-course-key={course.key}
                   data-course-label={course.label}
+                  data-fully-hidden={course.isFullyHidden ? '1' : '0'}
                   draggable={isAdmin ? 'true' : 'false'}
                 >
                   <button class='course-switch w-full text-left' type='button' data-course-key={course.key}>
                     <span class='course-main'>
                       <span class='course-label'>{course.label}</span>
-                      <span class='course-count'>{course.docs.length}</span>
+                      <span class='course-right'>
+                        <span class='course-count'>{course.docs.length}</span>
+                        {course.isFullyHidden && <span class='course-hidden-badge'>已隐藏</span>}
+                      </span>
                     </span>
                     <span class='course-meta'>最近更新：{new Date(course.updatedAt).toLocaleString('zh-CN')}</span>
                   </button>
@@ -138,7 +136,7 @@ function buildNewDocHref(courseLabel = '') {
                         重命名课程
                       </button>
                     )}
-                    {isAdmin && (
+                    {isAdmin && !course.isFullyHidden && (
                       <button
                         class='admin-btn admin-btn-danger course-hide-btn'
                         type='button'
@@ -148,9 +146,9 @@ function buildNewDocHref(courseLabel = '') {
                         隐藏课程
                       </button>
                     )}
-                    {isAdmin && (
+                    {isAdmin && !course.isFullyVisible && (
                       <button
-                        class='admin-btn admin-btn-primary course-show-btn'
+                        class='admin-btn admin-btn-success course-show-btn'
                         type='button'
                         data-course-key={course.key}
                         data-course-label={course.label}
@@ -203,6 +201,7 @@ function buildNewDocHref(courseLabel = '') {
   // @ts-nocheck
   const main = document.querySelector('main[data-is-admin]')
   const isAdmin = main?.getAttribute('data-is-admin') === '1'
+  const statusWrap = document.getElementById('admin-reorder-note')
   const status = document.getElementById('admin-reorder-status')
   const courseList = document.getElementById('course-list')
   const courseItems = [...document.querySelectorAll('.admin-course-item')]
@@ -210,10 +209,13 @@ function buildNewDocHref(courseLabel = '') {
   const quickAddCourse = document.getElementById('quick-add-course')
 
   function setStatus(message, isError = false) {
-    if (!status) return
-    status.textContent = message
-    status.classList.toggle('text-red-600', isError)
-    status.classList.toggle('text-green-600', !isError && !!message)
+    if (!status || !statusWrap) return
+    const next = String(message || '').trim()
+    const hasMessage = Boolean(next)
+    status.textContent = next
+    status.classList.toggle('text-red-600', hasMessage && isError)
+    status.classList.toggle('text-green-600', hasMessage && !isError)
+    statusWrap.classList.toggle('hidden', !hasMessage)
   }
 
   async function saveOrder(payload) {
@@ -479,6 +481,12 @@ function buildNewDocHref(courseLabel = '') {
     gap: 0.5rem;
   }
 
+  .course-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+  }
+
   .course-label {
     font-size: 0.94rem;
     font-weight: 600;
@@ -496,6 +504,30 @@ function buildNewDocHref(courseLabel = '') {
     color: hsl(var(--muted-foreground));
     font-size: 0.7rem;
     line-height: 1.45;
+  }
+
+  .course-hidden-badge {
+    border-radius: 999px;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--muted) / 0.85);
+    color: hsl(var(--muted-foreground));
+    font-size: 0.66rem;
+    line-height: 1.1;
+    padding: 0.14rem 0.4rem;
+  }
+
+  .admin-course-item.is-fully-hidden:not(.is-active) {
+    background-color: hsl(var(--muted) / 0.2);
+  }
+
+  .admin-course-item.is-fully-hidden::before {
+    background-color: hsl(var(--muted-foreground) / 0.42);
+  }
+
+  .admin-course-item.is-fully-hidden .course-label,
+  .admin-course-item.is-fully-hidden .course-count,
+  .admin-course-item.is-fully-hidden .course-meta {
+    color: hsl(var(--muted-foreground));
   }
 
   .admin-doc-row {

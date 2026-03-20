@@ -22,18 +22,16 @@ if (Astro.request.method === 'POST') {
     return Astro.redirect('/admin')
   }
 
-  error = '用户名或密码不正确'
+  error = '用户名或密码不正确。'
 }
 ---
 
-<PageLayout meta={{ title: '后台登录', description: 'NeoTechMind admin login' }}>
+<PageLayout meta={{ title: '后台登录', description: 'NeoTechMind admin login' }} containerClass='max-w-[96rem]'>
   <main class='admin-page mx-auto max-w-xl py-14'>
     <section class='admin-card p-8'>
       <p class='admin-kicker'>Admin</p>
       <h1 class='admin-title'>登录后台</h1>
-      <p class='admin-desc'>
-        首次启动会根据 <code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code> 自动初始化管理员账号。
-      </p>
+
 
       {error && <p class='admin-alert admin-alert-error'>{error}</p>}
 
@@ -55,3 +53,4 @@ if (Astro.request.method === 'POST') {
     </section>
   </main>
 </PageLayout>
+
