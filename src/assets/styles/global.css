@@ -95,6 +95,11 @@ span.katex-display > .katex {
 .bb-markdown.prose table {
   margin-inline: auto;
   width: max-content;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* [Markdown link visibility] */
