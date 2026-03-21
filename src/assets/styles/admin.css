@@ -822,6 +822,10 @@
   place-items: center;
 }
 
+.attachment-modal.hidden {
+  display: none;
+}
+
 .attachment-modal-backdrop {
   position: absolute;
   inset: 0;
