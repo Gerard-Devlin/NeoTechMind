@@ -1,5 +1,4 @@
----
-import AttachmentTreeNode from '@/components/admin/AttachmentTreeNode.astro'
+﻿---
 import PageLayout from '@/layouts/BaseLayout.astro'
 import { getSessionFromCookies, isAdminSession } from '@/lib/server/auth.mjs'
 import { listMediaStorage } from '@/lib/server/content.mjs'
@@ -36,12 +35,48 @@ interface TreeFolderNode {
   files: TreeFileNode[]
 }
 
+interface FolderTableRow {
+  kind: 'folder'
+  key: string
+  name: string
+  path: string
+  depth: number
+  ancestors: string[]
+}
+
+interface FileTableRow {
+  kind: 'file'
+  key: string
+  name: string
+  path: string
+  depth: number
+  ancestors: string[]
+  mimeType: string
+  sizeBytes: number
+  refCount: number
+  updatedAt: string
+}
+
+type AttachmentTableRow = FolderTableRow | FileTableRow
+
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
 
-function insertStoragePath(root: MutableTreeFolderNode, item: StorageRecord) {
-  const parts = String(item.file_path || '')
+function normalizeDisplaySegments(filePath: string) {
+  const parts = String(filePath || '')
     .split('/')
     .filter(Boolean)
+  if (!parts.length) return []
+  if (parts[0] === 'uploads') {
+    return parts.slice(1)
+  }
+  if (parts[0] === 'imports' && parts[1] === 'techmind') {
+    return parts.slice(2)
+  }
+  return parts
+}
+
+function insertStoragePath(root: MutableTreeFolderNode, item: StorageRecord) {
+  const parts = normalizeDisplaySegments(String(item.file_path || ''))
   if (!parts.length) return
 
   let cursor = root
@@ -62,7 +97,7 @@ function insertStoragePath(root: MutableTreeFolderNode, item: StorageRecord) {
   const fileName = parts[parts.length - 1]
   cursor.files.push({
     name: fileName,
-    path: item.file_path,
+    path: String(item.file_path || ''),
     mimeType: item.mime_type || 'application/octet-stream',
     sizeBytes: Number(item.size_bytes || 0),
     refCount: Number(item.ref_count || 0),
@@ -85,6 +120,142 @@ function finalizeTree(node: MutableTreeFolderNode): TreeFolderNode {
   }
 }
 
+function flattenTableRows(
+  folderNode: TreeFolderNode,
+  depth = 0,
+  ancestors: string[] = []
+): AttachmentTableRow[] {
+  const rows: AttachmentTableRow[] = []
+
+  for (const folder of folderNode.folders) {
+    rows.push({
+      kind: 'folder',
+      key: `folder:${folder.path}`,
+      name: folder.name,
+      path: folder.path,
+      depth,
+      ancestors
+    })
+    rows.push(...flattenTableRows(folder, depth + 1, [...ancestors, folder.path]))
+  }
+
+  for (const file of folderNode.files) {
+    rows.push({
+      kind: 'file',
+      key: `file:${file.path}`,
+      name: file.name,
+      path: file.path,
+      depth,
+      ancestors,
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeBytes,
+      refCount: file.refCount,
+      updatedAt: file.updatedAt
+    })
+  }
+
+  return rows
+}
+
+function formatSize(bytes: number) {
+  const value = Number(bytes || 0)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function formatDate(value: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.valueOf())) return '-'
+  return date.toLocaleString('zh-CN')
+}
+
+function getFileExtension(fileName: string) {
+  const normalized = String(fileName || '').trim()
+  const index = normalized.lastIndexOf('.')
+  if (index <= 0 || index === normalized.length - 1) return ''
+  return normalized.slice(index + 1).toLowerCase()
+}
+
+function resolveFileGlyphType(fileName: string, mimeType: string) {
+  const ext = getFileExtension(fileName)
+  const mime = String(mimeType || '').toLowerCase()
+
+  if (
+    ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico', 'tif', 'tiff', 'heic'].includes(ext) ||
+    mime.startsWith('image/')
+  ) {
+    return 'image'
+  }
+  if (ext === 'pdf' || mime === 'application/pdf') return 'pdf'
+  if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return 'word'
+  if (['xls', 'xlsx', 'xlsm', 'ods', 'csv'].includes(ext)) return 'excel'
+  if (['ppt', 'pptx', 'odp'].includes(ext)) return 'ppt'
+  if (
+    ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz'].includes(ext) ||
+    mime.includes('zip') ||
+    mime.includes('compressed')
+  ) {
+    return 'archive'
+  }
+  if (
+    ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg'].includes(ext) ||
+    mime.startsWith('audio/')
+  ) {
+    return 'audio'
+  }
+  if (
+    ['mp4', 'mkv', 'avi', 'mov', 'webm', 'm4v'].includes(ext) ||
+    mime.startsWith('video/')
+  ) {
+    return 'video'
+  }
+  if (['md', 'mdx'].includes(ext) || mime === 'text/markdown') return 'markdown'
+  if (
+    [
+      'c',
+      'cc',
+      'cpp',
+      'h',
+      'hpp',
+      'py',
+      'java',
+      'js',
+      'jsx',
+      'ts',
+      'tsx',
+      'go',
+      'rs',
+      'php',
+      'sh',
+      'bash',
+      'zsh',
+      'sql',
+      'cs',
+      'kt',
+      'rb',
+      'swift',
+      'vue',
+      'svelte',
+      'html',
+      'htm',
+      'css',
+      'scss',
+      'less',
+      'xml',
+      'yaml',
+      'yml',
+      'toml'
+    ].includes(ext)
+  ) {
+    return 'code'
+  }
+  if (['txt', 'log', 'ini', 'conf'].includes(ext) || mime.startsWith('text/')) return 'text'
+  return 'file'
+}
+
 const session = await getSessionFromCookies(Astro.cookies)
 if (!session) {
   return Astro.redirect('/admin/login')
@@ -105,10 +276,11 @@ for (const item of storageRecords) {
 }
 
 const treeRoot = finalizeTree(mutableRoot)
+const tableRows = flattenTableRows(treeRoot)
 ---
 
 <PageLayout
-  meta={{ title: '管理附件', description: 'NeoTechMind media manager' }}
+  meta={{ title: '管理附件', description: 'NeoTechMind attachment manager' }}
   containerClass='max-w-[96rem]'
 >
   <main class='admin-page py-7 md:py-8'>
@@ -116,98 +288,192 @@ const treeRoot = finalizeTree(mutableRoot)
       <div>
         <p class='admin-kicker'>Admin</p>
         <h1 class='admin-title'>管理附件</h1>
-        <p class='admin-desc'>
-          像文件夹管理器一样查看数据库中的附件路径结构，点击文件可在右侧查看详情。
-        </p>
+        <p class='admin-desc'>按文件夹样式查看数据库中的附件结构，支持展开目录并查看文件详情。</p>
       </div>
       <div class='admin-toolbar'>
-        <a class='admin-btn' href='/admin'>返回后台</a>
+        <a class='admin-btn' href='/admin'>← 返回后台</a>
       </div>
     </section>
 
-    <section class='admin-card mt-6 p-6 md:p-7'>
+    <section class='mt-6'>
       <div class='admin-card-head'>
-        <h2 class='text-xl font-semibold'>数据库附件结构</h2>
-        <p class='text-sm text-muted-foreground'>
-          {storageRecords.length} 个文件{isAdmin ? '（管理员视角：全部）' : '（当前账号可见）'}
-        </p>
+        <div>
+          <h2 class='text-xl font-semibold'>数据库附件</h2>
+          <p class='text-sm text-muted-foreground'>
+            {storageRecords.length} 个文件{isAdmin ? '（管理员视角：全部）' : '（当前账号可见）'}
+          </p>
+        </div>
+        <div class='attachment-head-actions'>
+          <p id='attachment-selection-count' class='text-sm text-muted-foreground'>已选择 0 项</p>
+          <button id='attachment-bulk-download' class='attachment-download-btn' type='button' disabled>
+            批量下载
+          </button>
+        </div>
       </div>
 
       {storageRecords.length === 0 ? (
         <p class='mt-4 text-muted-foreground'>暂无附件记录。</p>
       ) : (
-        <div class='attachment-manager mt-5'>
-          <section class='attachment-tree-panel'>
-            <ul id='attachment-tree-root' class='attachment-tree-root'>
-              {treeRoot.folders.map((folder) => (
-                <AttachmentTreeNode node={folder} level={0} />
-              ))}
-              {treeRoot.files.map((file) => (
-                <li class='attachment-file-row root-file' style='--tree-level:0;'>
-                  <button
-                    type='button'
-                    class='attachment-file-btn'
-                    data-file-path={file.path}
-                    data-file-name={file.name}
-                    data-file-mime={file.mimeType}
-                    data-file-size={String(file.sizeBytes)}
-                    data-file-ref-count={String(file.refCount)}
-                    data-file-updated-at={file.updatedAt}
-                  >
-                    {file.name}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
+        <section class='attachment-browser mt-5'>
+          <div class='attachment-browser-table-wrap'>
+            <table class='attachment-browser-table'>
+              <thead>
+                <tr>
+                  <th class='attachment-col-check'>
+                    <input
+                      id='attachment-select-all'
+                      type='checkbox'
+                      class='attachment-checkbox'
+                      aria-label='全选'
+                    />
+                  </th>
+                  <th>文件名</th>
+                  <th class='attachment-col-size'>文件大小</th>
+                  <th class='attachment-col-date'>最后修改日期</th>
+                </tr>
+              </thead>
+              <tbody id='attachment-browser-body'>
+                {tableRows.map((row) =>
+                  row.kind === 'folder' ? (
+                    <tr
+                      class='attachment-browser-row is-folder'
+                      data-row-kind='folder'
+                      data-row-path={row.path}
+                      data-ancestors={row.ancestors.join('||')}
+                    >
+                      <td class='attachment-cell-check'>
+                        <input
+                          type='checkbox'
+                          class='attachment-checkbox'
+                          data-row-checkbox='1'
+                          aria-label={`选择文件夹 ${row.name}`}
+                        />
+                      </td>
+                      <td>
+                        <div class='attachment-entry' style={`--row-depth:${row.depth};`}>
+                          <button
+                            type='button'
+                            class='attachment-toggle'
+                            data-folder-path={row.path}
+                            aria-label={`展开文件夹 ${row.name}`}
+                          >
+                            <span class='attachment-caret'>▸</span>
+                          </button>
+                          <span class='folder-glyph' aria-hidden='true'></span>
+                          <div class='attachment-text'>
+                            <p class='attachment-name'>{row.name}</p>
+                            <p class='attachment-sub'>文件夹</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td class='attachment-size-cell'>- / -</td>
+                      <td class='attachment-date-cell'>-</td>
+                    </tr>
+                  ) : (
+                    <tr
+                      class='attachment-browser-row is-file'
+                      data-row-kind='file'
+                      data-row-path={row.path}
+                      data-ancestors={row.ancestors.join('||')}
+                      data-file-name={row.name}
+                      data-file-path={row.path}
+                      data-file-mime={row.mimeType}
+                      data-file-size={String(row.sizeBytes)}
+                      data-file-ref-count={String(row.refCount)}
+                      data-file-updated-at={row.updatedAt}
+                    >
+                      <td class='attachment-cell-check'>
+                        <input
+                          type='checkbox'
+                          class='attachment-checkbox'
+                          data-row-checkbox='1'
+                          aria-label={`选择文件 ${row.name}`}
+                        />
+                      </td>
+                      <td>
+                        <div class='attachment-entry' style={`--row-depth:${row.depth};`}>
+                          <span class='attachment-toggle attachment-toggle-placeholder' aria-hidden='true'></span>
+                          <span
+                            class='file-glyph'
+                            data-kind={resolveFileGlyphType(row.name, row.mimeType)}
+                            aria-hidden='true'
+                          ></span>
+                          <div class='attachment-text'>
+                            <p class='attachment-name'>{row.name}</p>
+                            <p class='attachment-sub'>{row.mimeType || '文件'}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td class='attachment-size-cell'>{formatSize(row.sizeBytes)}</td>
+                      <td class='attachment-date-cell'>{formatDate(row.updatedAt)}</td>
+                    </tr>
+                  )
+                )}
+              </tbody>
+            </table>
+          </div>
 
-          <aside class='attachment-detail-panel'>
-            <p id='attachment-detail-empty' class='text-sm text-muted-foreground'>
-              点击左侧文件查看详情。
-            </p>
-            <div id='attachment-detail-body' class='attachment-detail-body hidden'>
-              <h3 id='attachment-detail-name' class='text-lg font-semibold'></h3>
-              <code id='attachment-detail-path' class='attachment-detail-path'></code>
-              <ul class='attachment-detail-list'>
-                <li>
-                  <span>类型</span>
-                  <strong id='attachment-detail-mime'></strong>
-                </li>
-                <li>
-                  <span>大小</span>
-                  <strong id='attachment-detail-size'></strong>
-                </li>
-                <li>
-                  <span>引用次数</span>
-                  <strong id='attachment-detail-ref'></strong>
-                </li>
-                <li>
-                  <span>更新时间</span>
-                  <strong id='attachment-detail-updated'></strong>
-                </li>
-              </ul>
-
-              <a id='attachment-detail-open' class='admin-btn admin-btn-sm mt-2' target='_blank' href='#'>
-                打开文件
-              </a>
-
-              <img
-                id='attachment-detail-image'
-                class='attachment-detail-image hidden'
-                alt='attachment preview'
-              />
-            </div>
-          </aside>
-        </div>
+        </section>
       )}
     </section>
+
+    <div id='attachment-modal' class='attachment-modal hidden' role='dialog' aria-modal='true' aria-labelledby='attachment-detail-name'>
+      <button
+        id='attachment-modal-backdrop'
+        class='attachment-modal-backdrop'
+        type='button'
+        aria-label='关闭详情弹窗'
+      ></button>
+      <section class='attachment-modal-panel'>
+        <div class='attachment-modal-head'>
+          <h3 class='text-base font-semibold'>附件详情</h3>
+          <button
+            type='button'
+            class='attachment-modal-close'
+            data-close-attachment-modal
+            aria-label='关闭详情弹窗'
+          >
+            ×
+          </button>
+        </div>
+        <div id='attachment-detail-body' class='attachment-detail-body'>
+          <h3 id='attachment-detail-name' class='text-lg font-semibold'></h3>
+          <code id='attachment-detail-path' class='attachment-detail-path'></code>
+          <ul class='attachment-detail-list'>
+            <li>
+              <span>类型</span>
+              <strong id='attachment-detail-mime'></strong>
+            </li>
+            <li>
+              <span>大小</span>
+              <strong id='attachment-detail-size'></strong>
+            </li>
+            <li>
+              <span>引用次数</span>
+              <strong id='attachment-detail-ref'></strong>
+            </li>
+            <li>
+              <span>最后修改</span>
+              <strong id='attachment-detail-updated'></strong>
+            </li>
+          </ul>
+
+          <img id='attachment-detail-image' class='attachment-detail-image hidden' alt='attachment preview' />
+        </div>
+      </section>
+    </div>
   </main>
 </PageLayout>
 
 <script>
   // @ts-nocheck
-  const treeRoot = document.getElementById('attachment-tree-root')
-  const detailEmpty = document.getElementById('attachment-detail-empty')
+  const body = document.getElementById('attachment-browser-body')
+  const selectAll = document.getElementById('attachment-select-all')
+  const bulkDownloadBtn = document.getElementById('attachment-bulk-download')
+  const selectionCountEl = document.getElementById('attachment-selection-count')
+  const modal = document.getElementById('attachment-modal')
+  const modalBackdrop = document.getElementById('attachment-modal-backdrop')
+  const modalCloseButtons = document.querySelectorAll('[data-close-attachment-modal]')
   const detailBody = document.getElementById('attachment-detail-body')
   const nameEl = document.getElementById('attachment-detail-name')
   const pathEl = document.getElementById('attachment-detail-path')
@@ -215,7 +481,6 @@ const treeRoot = finalizeTree(mutableRoot)
   const sizeEl = document.getElementById('attachment-detail-size')
   const refEl = document.getElementById('attachment-detail-ref')
   const updatedEl = document.getElementById('attachment-detail-updated')
-  const openEl = document.getElementById('attachment-detail-open')
   const imageEl = document.getElementById('attachment-detail-image')
 
   function formatSize(bytes) {
@@ -226,54 +491,216 @@ const treeRoot = finalizeTree(mutableRoot)
     return `${(value / (1024 * 1024)).toFixed(2)} MB`
   }
 
-  function selectFile(button) {
-    document.querySelectorAll('.attachment-file-btn.is-active').forEach((node) => {
-      node.classList.remove('is-active')
-    })
-    button.classList.add('is-active')
-
-    const fileName = button.getAttribute('data-file-name') || ''
-    const filePath = button.getAttribute('data-file-path') || ''
-    const fileMime = button.getAttribute('data-file-mime') || ''
-    const fileSize = button.getAttribute('data-file-size') || '0'
-    const fileRefCount = button.getAttribute('data-file-ref-count') || '0'
-    const fileUpdatedAt = button.getAttribute('data-file-updated-at') || ''
-
-    if (detailEmpty) detailEmpty.classList.add('hidden')
-    if (detailBody) detailBody.classList.remove('hidden')
-    if (nameEl) nameEl.textContent = fileName
-    if (pathEl) pathEl.textContent = filePath
-    if (mimeEl) mimeEl.textContent = fileMime || 'application/octet-stream'
-    if (sizeEl) sizeEl.textContent = formatSize(fileSize)
-    if (refEl) refEl.textContent = `${Number(fileRefCount || 0)}`
-    if (updatedEl) {
-      updatedEl.textContent = fileUpdatedAt
-        ? new Date(fileUpdatedAt).toLocaleString('zh-CN')
-        : '-'
-    }
-    if (openEl) openEl.setAttribute('href', filePath || '#')
-
-    if (imageEl) {
-      const isImage = String(fileMime || '').startsWith('image/')
-      if (isImage && filePath) {
-        imageEl.setAttribute('src', filePath)
-        imageEl.classList.remove('hidden')
-      } else {
-        imageEl.removeAttribute('src')
-        imageEl.classList.add('hidden')
-      }
-    }
+  function formatDate(value) {
+    if (!value) return '-'
+    const date = new Date(value)
+    if (Number.isNaN(date.valueOf())) return '-'
+    return date.toLocaleString('zh-CN')
   }
 
-  treeRoot?.addEventListener('click', (event) => {
-    const target =
-      event.target instanceof Element ? event.target.closest('.attachment-file-btn') : null
-    if (!target) return
-    selectFile(target)
+  function openModal() {
+    if (!modal) return
+    modal.classList.remove('hidden')
+    document.body.classList.add('admin-modal-open')
+  }
+
+  function closeModal() {
+    if (!modal) return
+    modal.classList.add('hidden')
+    document.body.classList.remove('admin-modal-open')
+  }
+
+  modalBackdrop?.addEventListener('click', closeModal)
+  modalCloseButtons.forEach((button) => button.addEventListener('click', closeModal))
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeModal()
+    }
   })
 
-  const firstFile = document.querySelector('.attachment-file-btn')
-  if (firstFile) {
-    selectFile(firstFile)
+  if (body) {
+    const rows = Array.from(body.querySelectorAll('.attachment-browser-row'))
+    const folderSet = new Set()
+
+    function parseAncestors(row) {
+      const raw = row.getAttribute('data-ancestors') || ''
+      return raw ? raw.split('||').filter(Boolean) : []
+    }
+
+    function applyVisibility() {
+      rows.forEach((row) => {
+        const ancestors = parseAncestors(row)
+        const visible = ancestors.every((path) => folderSet.has(path))
+        row.classList.toggle('hidden', !visible)
+      })
+
+      rows.forEach((row) => {
+        if (row.getAttribute('data-row-kind') !== 'folder') return
+        const path = row.getAttribute('data-row-path') || ''
+        row.classList.toggle('is-open', folderSet.has(path))
+      })
+    }
+
+    function getFileRows() {
+      return rows.filter((row) => row.getAttribute('data-row-kind') === 'file')
+    }
+
+    function getFileCheckboxes() {
+      return getFileRows()
+        .map((row) => row.querySelector('.attachment-checkbox[data-row-checkbox="1"]'))
+        .filter(Boolean)
+    }
+
+    function syncSelectionUi() {
+      const fileCheckboxes = getFileCheckboxes()
+      const checkedCount = fileCheckboxes.filter((input) => input.checked).length
+      const total = fileCheckboxes.length
+
+      if (selectionCountEl) {
+        selectionCountEl.textContent = `已选择 ${checkedCount} 项`
+      }
+      if (bulkDownloadBtn) {
+        bulkDownloadBtn.disabled = checkedCount <= 0
+      }
+      if (selectAll) {
+        selectAll.checked = total > 0 && checkedCount === total
+        selectAll.indeterminate = checkedCount > 0 && checkedCount < total
+      }
+    }
+
+    function setFolderChildrenChecked(folderPath, checked) {
+      rows.forEach((row) => {
+        const ancestors = parseAncestors(row)
+        if (!ancestors.includes(folderPath)) return
+        const checkbox = row.querySelector('.attachment-checkbox[data-row-checkbox="1"]')
+        if (checkbox) checkbox.checked = checked
+      })
+    }
+
+    function downloadByPath(path) {
+      if (!path) return
+      const anchor = document.createElement('a')
+      anchor.href = path
+      anchor.download = path.split('/').pop() || 'file'
+      anchor.rel = 'noopener'
+      anchor.style.display = 'none'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+    }
+
+    function handleBulkDownload() {
+      const selectedPaths = getFileRows()
+        .filter((row) => {
+          const checkbox = row.querySelector('.attachment-checkbox[data-row-checkbox="1"]')
+          return Boolean(checkbox?.checked)
+        })
+        .map((row) => row.getAttribute('data-file-path') || '')
+        .filter(Boolean)
+
+      if (!selectedPaths.length) return
+      selectedPaths.forEach((path) => {
+        downloadByPath(path)
+      })
+    }
+
+    function selectFile(row) {
+      rows.forEach((item) => item.classList.toggle('is-selected', item === row))
+
+      const fileName = row.getAttribute('data-file-name') || ''
+      const filePath = row.getAttribute('data-file-path') || ''
+      const fileMime = row.getAttribute('data-file-mime') || 'application/octet-stream'
+      const fileSize = row.getAttribute('data-file-size') || '0'
+      const fileRef = row.getAttribute('data-file-ref-count') || '0'
+      const fileUpdated = row.getAttribute('data-file-updated-at') || ''
+
+      detailBody?.classList.remove('hidden')
+      if (nameEl) nameEl.textContent = fileName
+      if (pathEl) pathEl.textContent = filePath
+      if (mimeEl) mimeEl.textContent = fileMime
+      if (sizeEl) sizeEl.textContent = formatSize(fileSize)
+      if (refEl) refEl.textContent = `${Number(fileRef || 0)}`
+      if (updatedEl) updatedEl.textContent = formatDate(fileUpdated)
+
+      const isImage = String(fileMime || '').startsWith('image/')
+      if (imageEl) {
+        if (isImage && filePath) {
+          imageEl.setAttribute('src', filePath)
+          imageEl.classList.remove('hidden')
+        } else {
+          imageEl.removeAttribute('src')
+          imageEl.classList.add('hidden')
+        }
+      }
+
+      openModal()
+    }
+
+    function toggleFolder(path) {
+      if (!path) return
+      if (folderSet.has(path)) {
+        for (const opened of Array.from(folderSet)) {
+          if (opened === path || opened.startsWith(`${path}/`)) {
+            folderSet.delete(opened)
+          }
+        }
+      } else {
+        folderSet.add(path)
+      }
+      applyVisibility()
+    }
+
+    body.addEventListener('click', (event) => {
+      const target = event.target instanceof Element ? event.target : null
+      if (!target) return
+      if (target.closest('.attachment-checkbox')) return
+
+      const folderBtn = target.closest('.attachment-toggle[data-folder-path]')
+      if (folderBtn) {
+        event.preventDefault()
+        toggleFolder(folderBtn.getAttribute('data-folder-path') || '')
+        return
+      }
+
+      const folderRow = target.closest('.attachment-browser-row[data-row-kind="folder"]')
+      if (folderRow) {
+        toggleFolder(folderRow.getAttribute('data-row-path') || '')
+        return
+      }
+
+      const fileRow = target.closest('.attachment-browser-row[data-row-kind="file"]')
+      if (fileRow) {
+        selectFile(fileRow)
+      }
+    })
+
+    body.addEventListener('change', (event) => {
+      const target = event.target instanceof HTMLInputElement ? event.target : null
+      if (!target?.matches('.attachment-checkbox[data-row-checkbox="1"]')) return
+
+      const row = target.closest('.attachment-browser-row')
+      if (!row) return
+
+      const kind = row.getAttribute('data-row-kind')
+      if (kind === 'folder') {
+        const folderPath = row.getAttribute('data-row-path') || ''
+        setFolderChildrenChecked(folderPath, target.checked)
+      }
+
+      syncSelectionUi()
+    })
+
+    selectAll?.addEventListener('change', () => {
+      const checked = Boolean(selectAll.checked)
+      rows.forEach((row) => {
+        const checkbox = row.querySelector('.attachment-checkbox[data-row-checkbox="1"]')
+        if (checkbox) checkbox.checked = checked
+      })
+      syncSelectionUi()
+    })
+
+    bulkDownloadBtn?.addEventListener('click', handleBulkDownload)
+    applyVisibility()
+    syncSelectionUi()
   }
 </script>

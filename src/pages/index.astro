@@ -13,6 +13,7 @@ const sections = snapshot.sections ?? []
 const recentDocs = snapshot.recentDocs ?? []
 const siteTitle = String(snapshot.siteTitle || config.title || config.author || 'NeoTechMind')
 const siteDescription = String(snapshot.siteDescription || '')
+const homepageStatusText = String(snapshot.homepageStatusText || '课程内容持续更新中')
 const imagePath = String(snapshot.homepageLogoSrc || config.logo.src || '').trim()
 
 const images = import.meta.glob<{ default: ImageMetadata }>(
@@ -77,7 +78,7 @@ if (imagePath.startsWith('/src/assets/') && !imageLoader) {
           ></span>
           <span class='size-2 rounded-full bg-green-400'></span>
         </span>
-        <p class='font-medium text-muted-foreground'>课程内容持续更新中</p>
+        <p class='font-medium text-muted-foreground'>{homepageStatusText}</p>
       </button>
     </section>
 

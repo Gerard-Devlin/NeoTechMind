@@ -18,6 +18,8 @@ const HOMEPAGE_DESCRIPTION_KEY = 'homepage_description'
 const SITE_TITLE_KEY = 'site_title'
 const SITE_FAVICON_HREF_KEY = 'site_favicon_href'
 const HOMEPAGE_LOGO_SRC_KEY = 'homepage_logo_src'
+const HOMEPAGE_STATUS_TEXT_KEY = 'homepage_status_text'
+const HOMEPAGE_STATUS_TEXT_DEFAULT = '课程内容持续更新中'
 const HOMEPAGE_DESCRIPTION_DEFAULT =
   'NeoTechMind 是一个开源学习资源平台，旨在帮助你轻松理解、探索并掌握计算机科学核心概念。从编程语言到深度学习，我们让每个人都能更容易地学习。'
 
@@ -662,6 +664,12 @@ function normalizeSiteTitleValue(value) {
     .replace(/\s+/g, ' ')
 }
 
+function normalizeHomepageStatusTextValue(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
 function normalizePublicUrlOrPath(value) {
   const normalized = String(value || '').trim()
   if (!normalized) return ''
@@ -1161,6 +1169,26 @@ export async function listMediaStorage(limit = 1000, actor) {
   }))
 }
 
+export async function getMediaMetadataByPaths(filePaths = []) {
+  const normalizedPaths = [...new Set(filePaths.map((value) => normalizeMediaPath(value)).filter(Boolean))]
+  if (normalizedPaths.length === 0) return []
+
+  const placeholders = normalizedPaths.map(() => '?').join(', ')
+  const rows = await dbAll(
+    `SELECT file_path, mime_type, size_bytes, updated_at
+     FROM media_files
+     WHERE file_path IN (${placeholders})`,
+    normalizedPaths
+  )
+
+  return rows.map((row) => ({
+    file_path: String(row.file_path || ''),
+    mime_type: String(row.mime_type || ''),
+    size_bytes: Number(row.size_bytes || 0),
+    updated_at: String(row.updated_at || '')
+  }))
+}
+
 export async function registerUploadedMedia(input) {
   const normalizedPath = normalizeMediaPath(input?.filePath || '')
   if (!normalizedPath) return null
@@ -1444,16 +1472,19 @@ export async function getHomepageDescription() {
 }
 
 export async function getSiteBrandingSettings() {
-  const [siteTitle, siteFaviconHref, homepageLogoSrc] = await Promise.all([
+  const [siteTitle, siteFaviconHref, homepageLogoSrc, homepageStatusText] = await Promise.all([
     getSiteSettingValue(SITE_TITLE_KEY),
     getSiteSettingValue(SITE_FAVICON_HREF_KEY),
-    getSiteSettingValue(HOMEPAGE_LOGO_SRC_KEY)
+    getSiteSettingValue(HOMEPAGE_LOGO_SRC_KEY),
+    getSiteSettingValue(HOMEPAGE_STATUS_TEXT_KEY)
   ])
 
   return {
     siteTitle: normalizeSiteTitleValue(siteTitle),
     siteFaviconHref: normalizePublicUrlOrPath(siteFaviconHref),
-    homepageLogoSrc: normalizePublicUrlOrPath(homepageLogoSrc)
+    homepageLogoSrc: normalizePublicUrlOrPath(homepageLogoSrc),
+    homepageStatusText:
+      normalizeHomepageStatusTextValue(homepageStatusText) || HOMEPAGE_STATUS_TEXT_DEFAULT
   }
 }
 
@@ -1475,7 +1506,13 @@ export async function updateHomepageDescription(description, actor) {
 }
 
 export async function updateSiteSettings(
-  { homepageDescription = '', siteTitle = '', siteFaviconHref = '', homepageLogoSrc = '' },
+  {
+    homepageDescription = '',
+    siteTitle = '',
+    siteFaviconHref = '',
+    homepageLogoSrc = '',
+    homepageStatusText = ''
+  },
   actor
 ) {
   const normalizedActor = normalizeActor(actor)
@@ -1509,11 +1546,20 @@ export async function updateSiteSettings(
     throw new Error('Homepage logo must be a /path or http(s) URL.')
   }
 
+  const homepageStatusTextValue = normalizeHomepageStatusTextValue(homepageStatusText)
+  if (!homepageStatusTextValue) {
+    throw new Error('Homepage status text cannot be empty.')
+  }
+  if (homepageStatusTextValue.length > 120) {
+    throw new Error('Homepage status text is too long.')
+  }
+
   await Promise.all([
     saveSiteSettingValue(HOMEPAGE_DESCRIPTION_KEY, descriptionValue),
     saveSiteSettingValue(SITE_TITLE_KEY, siteTitleValue),
     saveSiteSettingValue(SITE_FAVICON_HREF_KEY, faviconValue),
-    saveSiteSettingValue(HOMEPAGE_LOGO_SRC_KEY, homepageLogoValue)
+    saveSiteSettingValue(HOMEPAGE_LOGO_SRC_KEY, homepageLogoValue),
+    saveSiteSettingValue(HOMEPAGE_STATUS_TEXT_KEY, homepageStatusTextValue)
   ])
 
   await cleanupUnreferencedUploadMedia()
@@ -1522,7 +1568,8 @@ export async function updateSiteSettings(
     homepageDescription: descriptionValue,
     siteTitle: siteTitleValue,
     siteFaviconHref: faviconValue,
-    homepageLogoSrc: homepageLogoValue
+    homepageLogoSrc: homepageLogoValue,
+    homepageStatusText: homepageStatusTextValue
   }
 }
 
@@ -1602,6 +1649,7 @@ export async function getHomepageSnapshot() {
     siteTitle: brandingSettings.siteTitle,
     siteDescription,
     homepageLogoSrc: brandingSettings.homepageLogoSrc,
+    homepageStatusText: brandingSettings.homepageStatusText,
     sections,
     recentDocs: [...docs]
       .sort((left, right) => compareDatesDesc(left.updated_at, right.updated_at))

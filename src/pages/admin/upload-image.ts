@@ -5,25 +5,51 @@ import type { APIRoute } from 'astro'
 import { getSessionFromCookies } from '@/lib/server/auth.mjs'
 import { getContentById, registerUploadedMedia, slugifyText } from '@/lib/server/content.mjs'
 
-const IMAGE_MIME_BY_EXT: Record<string, string> = {
+const MIME_BY_EXT: Record<string, string> = {
   '.apng': 'image/apng',
   '.avif': 'image/avif',
   '.bmp': 'image/bmp',
+  '.csv': 'text/csv',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.gif': 'image/gif',
+  '.gz': 'application/gzip',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
   '.ico': 'image/x-icon',
+  '.json': 'application/json',
   '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
+  '.md': 'text/markdown',
+  '.mdx': 'text/markdown',
+  '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4',
+  '.ogg': 'audio/ogg',
+  '.pdf': 'application/pdf',
   '.png': 'image/png',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.rar': 'application/vnd.rar',
   '.svg': 'image/svg+xml',
   '.tif': 'image/tiff',
   '.tiff': 'image/tiff',
-  '.webp': 'image/webp'
+  '.txt': 'text/plain',
+  '.wav': 'audio/wav',
+  '.webm': 'video/webm',
+  '.webp': 'image/webp',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xml': 'application/xml',
+  '.zip': 'application/zip',
+  '.7z': 'application/x-7z-compressed'
 }
 
-function resolveImageMimeType(file: File) {
-  if (file.type && file.type.startsWith('image/')) return file.type
+const MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+
+function resolveMimeType(file: File) {
+  if (file.type) return file.type
   const ext = extname(String(file.name || '')).toLowerCase()
-  return IMAGE_MIME_BY_EXT[ext] || ''
+  return MIME_BY_EXT[ext] || 'application/octet-stream'
 }
 
 function json(data: Record<string, unknown>, status = 200) {
@@ -49,24 +75,25 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const contentIdRaw = String(formData.get('contentId') || '').trim()
 
   if (!(file instanceof File) || file.size <= 0) {
-    return json({ ok: false, message: 'Please select an image file.' }, 400)
+    return json({ ok: false, message: 'Please select a file.' }, 400)
   }
 
   if (!sectionLabel) {
     return json({ ok: false, message: 'Course name is required.' }, 400)
   }
 
-  const resolvedMimeType = resolveImageMimeType(file)
-  if (!resolvedMimeType) {
-    return json({ ok: false, message: 'Only image uploads are supported.' }, 400)
+  if (file.size > MAX_UPLOAD_SIZE) {
+    return json({ ok: false, message: 'File is too large (max 100MB).' }, 400)
   }
+
+  const resolvedMimeType = resolveMimeType(file)
 
   try {
     const sectionKey = slugifyText(sectionLabel) || 'uncategorized'
-    const originalName = basename(file.name || 'upload.png')
+    const originalName = basename(file.name || 'upload.bin')
     const ext = extname(originalName).toLowerCase()
     const base = originalName.slice(0, Math.max(0, originalName.length - ext.length))
-    const finalName = `${Date.now()}-${slugifyText(base) || 'upload'}${ext || '.png'}`
+    const finalName = `${Date.now()}-${slugifyText(base) || 'upload'}${ext || '.bin'}`
     const publicPath = `/uploads/${sectionKey}/${finalName}`
 
     const buffer = Buffer.from(await file.arrayBuffer())
@@ -92,7 +119,13 @@ export const POST: APIRoute = async ({ request, cookies }) => {
       ownerUserId: session.userId
     })
 
-    return json({ ok: true, path: publicPath })
+    return json({
+      ok: true,
+      path: publicPath,
+      mimeType: resolvedMimeType,
+      isImage: resolvedMimeType.startsWith('image/'),
+      originalName
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Upload failed'
     return json({ ok: false, message }, 500)

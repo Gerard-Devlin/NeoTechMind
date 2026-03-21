@@ -22,8 +22,17 @@ function inferFaviconType(href: string, fallbackType = 'image/x-icon') {
 
 const branding = await getSiteBrandingSettings()
 const siteName = branding.siteTitle || config.title
-const faviconHref = branding.siteFaviconHref || config.favicon.href
-const faviconType = inferFaviconType(faviconHref, config.favicon.type)
+const configuredFaviconHref =
+  typeof config.favicon === 'string'
+    ? config.favicon
+    : String(config.favicon?.href || '').trim()
+const configuredFaviconType =
+  typeof config.favicon === 'string'
+    ? inferFaviconType(config.favicon, 'image/x-icon')
+    : String(config.favicon?.type || '').trim()
+const faviconHref = branding.siteFaviconHref || configuredFaviconHref || '/favicon/favicon.ico'
+const faviconType = inferFaviconType(faviconHref, configuredFaviconType || 'image/x-icon')
+const hasCustomFavicon = Boolean(branding.siteFaviconHref)
 const siteTitle = `${title} ${config.titleDelimiter} ${siteName}`
 const canonicalURL = new URL(Astro.url.pathname, Astro.site)
 const socialImageURL = new URL(ogImage ? ogImage : config.socialCard, Astro.url).href
@@ -37,10 +46,18 @@ const socialImageURL = new URL(ogImage ? ogImage : config.socialCard, Astro.url)
 {/* Icons / Favicon */}
 <link rel='icon' type={faviconType} href={faviconHref} />
 <link rel='shortcut icon' type={faviconType} href={faviconHref} />
-<link rel='icon' type='image/png' sizes='32x32' href='/favicon/favicon-32x32.png' />
-<link rel='icon' type='image/png' sizes='16x16' href='/favicon/favicon-16x16.png' />
-<link rel='apple-touch-icon' sizes='180x180' href='/favicon/apple-touch-icon.png' />
-<link rel='manifest' href='/favicon/site.webmanifest' />
+{
+  hasCustomFavicon ? (
+    <link rel='apple-touch-icon' href={faviconHref} />
+  ) : (
+    <>
+      <link rel='icon' type='image/png' sizes='32x32' href='/favicon/favicon-32x32.png' />
+      <link rel='icon' type='image/png' sizes='16x16' href='/favicon/favicon-16x16.png' />
+      <link rel='apple-touch-icon' sizes='180x180' href='/favicon/apple-touch-icon.png' />
+      <link rel='manifest' href='/favicon/site.webmanifest' />
+    </>
+  )
+}
 
 <style>
   body {

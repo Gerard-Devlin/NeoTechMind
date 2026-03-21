@@ -1,3 +1,5 @@
+import { basename, extname } from 'node:path'
+
 import MarkdownIt from 'markdown-it'
 import markdownItAnchor from 'markdown-it-anchor'
 import markdownItAttrs from 'markdown-it-attrs'
@@ -5,7 +7,7 @@ import markdownItTaskLists from 'markdown-it-task-lists'
 import katex from 'katex'
 import { codeToHtml } from 'shiki'
 
-import { slugifyText } from './content.mjs'
+import { getMediaMetadataByPaths, slugifyText } from './content.mjs'
 
 function escapeHtml(value) {
   return String(value)
@@ -13,6 +15,163 @@ function escapeHtml(value) {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
+}
+
+const ATTACHMENT_IMAGE_EXTENSIONS = new Set([
+  '.apng',
+  '.avif',
+  '.bmp',
+  '.gif',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.svg',
+  '.tif',
+  '.tiff',
+  '.webp'
+])
+
+function normalizeAttachmentPath(value) {
+  const raw = decodeHtmlEntities(String(value || '').trim())
+  if (!raw) return ''
+
+  let normalized = raw
+    .replace(/^<+/, '')
+    .replace(/>+$/, '')
+    .split('#')[0]
+    .split('?')[0]
+
+  if (!normalized) return ''
+
+  try {
+    normalized = decodeURI(normalized)
+  } catch {}
+
+  return normalized.startsWith('/uploads/') || normalized.startsWith('/imports/techmind/') ? normalized : ''
+}
+
+function shouldRenderAttachmentCard(path, mimeType = '') {
+  const extension = extname(path).toLowerCase()
+  if (extension && ATTACHMENT_IMAGE_EXTENSIONS.has(extension)) return false
+  if (!extension && String(mimeType || '').toLowerCase().startsWith('image/')) return false
+  return true
+}
+
+function stripHtmlTags(value) {
+  return decodeHtmlEntities(String(value || '').replace(/<[^>]*>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function formatAttachmentSize(bytes) {
+  const value = Number(bytes || 0)
+  if (!Number.isFinite(value) || value <= 0) return '-'
+  if (value < 1024) return `${value} B`
+
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let scaled = value / 1024
+  let unitIndex = 0
+
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024
+    unitIndex += 1
+  }
+
+  const formatted = scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)
+  return `${formatted.replace(/\.0$/, '')} ${units[unitIndex]}`
+}
+
+function formatAttachmentDate(value) {
+  const date = new Date(String(value || ''))
+  if (Number.isNaN(date.getTime())) return '-'
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}/${month}/${day}`
+}
+
+function parseAttachmentAnchorsFromParagraph(innerHtml) {
+  const anchorPattern = /<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+  const anchors = []
+  let residual = String(innerHtml || '')
+  let match = null
+
+  while ((match = anchorPattern.exec(innerHtml))) {
+    const href = String(match[1] || '')
+    const inner = String(match[2] || '')
+    if (/<img\b/i.test(inner)) return []
+
+    const path = normalizeAttachmentPath(href)
+    if (!path || !shouldRenderAttachmentCard(path)) return []
+    anchors.push({ path, inner })
+    residual = residual.replace(match[0], '')
+  }
+
+  if (anchors.length === 0) return []
+
+  // Only transform pure attachment paragraphs.
+  const cleanedResidual = residual
+    .replace(/<br\s*\/?>/gi, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, '')
+  return cleanedResidual ? [] : anchors
+}
+
+function collectStandaloneAttachmentPaths(html) {
+  const paragraphPattern = /<p\b[^>]*>([\s\S]*?)<\/p>/gi
+  const paths = new Set()
+  let match = null
+
+  while ((match = paragraphPattern.exec(html))) {
+    const anchors = parseAttachmentAnchorsFromParagraph(match[1] || '')
+    for (const anchor of anchors) {
+      paths.add(anchor.path)
+    }
+  }
+
+  return [...paths]
+}
+
+function renderAttachmentCardsInHtml(html, metadataByPath) {
+  const downloadIcon =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2a1 1 0 0 1 1 1v7.1l2.45-2.46a1 1 0 1 1 1.42 1.42l-4.16 4.17a1 1 0 0 1-1.42 0L5.13 9.06a1 1 0 0 1 1.42-1.42L9 10.1V3a1 1 0 0 1 1-1Zm-6 13a1 1 0 0 1 1 1v.5c0 .28.22.5.5.5h9c.28 0 .5-.22.5-.5V16a1 1 0 1 1 2 0v.5A2.5 2.5 0 0 1 14.5 19h-9A2.5 2.5 0 0 1 3 16.5V16a1 1 0 0 1 1-1Z"/></svg>'
+
+  const renderAttachmentCard = (path, anchorInner) => {
+    const metadata = metadataByPath.get(path) || null
+    if (!path || !shouldRenderAttachmentCard(path, metadata?.mime_type || '')) return ''
+
+    const fileName = basename(path) || 'attachment'
+    const extension = extname(fileName).toLowerCase()
+    const extensionLabel = extension ? extension : metadata?.mime_type ? `.${metadata.mime_type}` : '.file'
+    const rawText = stripHtmlTags(anchorInner)
+    const fallbackLabel = extension ? fileName.slice(0, -extension.length) : fileName
+    const label =
+      rawText && rawText !== path && rawText !== fileName
+        ? rawText.replace(new RegExp(`${extension.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'), '').trim() ||
+          fallbackLabel
+        : fallbackLabel
+
+    const typeText = extension ? extension.slice(1).toUpperCase().slice(0, 5) : 'FILE'
+    const typeClass = extension === '.pdf' ? ' is-pdf' : ''
+    const sizeText = formatAttachmentSize(metadata?.size_bytes)
+    const dateText = formatAttachmentDate(metadata?.updated_at)
+    const escapedPath = escapeHtml(path)
+
+    return `<div class="bb-attachment-card not-prose"><span class="bb-attachment-type${typeClass}">${escapeHtml(typeText)}</span><div class="bb-attachment-main"><a class="bb-attachment-name" href="${escapedPath}">${escapeHtml(label || fallbackLabel)}</a><p class="bb-attachment-ext">${escapeHtml(extensionLabel)}</p></div><p class="bb-attachment-size">${escapeHtml(sizeText)}</p><p class="bb-attachment-date">${escapeHtml(dateText)}</p><div class="bb-attachment-actions"><a class="bb-attachment-action" href="${escapedPath}" download="${escapeHtml(fileName)}" aria-label="Download ${escapeHtml(fileName)}">${downloadIcon}</a></div></div>`
+  }
+
+  return html.replace(/<p\b[^>]*>([\s\S]*?)<\/p>/gi, (full, inner) => {
+    const anchors = parseAttachmentAnchorsFromParagraph(inner)
+    if (anchors.length === 0) return full
+
+    const cards = anchors
+      .map((item) => renderAttachmentCard(item.path, item.inner))
+      .filter(Boolean)
+      .join('')
+
+    return cards || full
+  })
 }
 
 function buildHeadingId(value) {
@@ -1261,9 +1420,14 @@ export function extractHeadings(source) {
 export async function renderMarkdown(source) {
   const headings = extractHeadings(source)
   const rendered = await renderCompositeMarkdown(source, buildInlineToc(headings))
+  const attachmentPaths = collectStandaloneAttachmentPaths(rendered.html)
+  const attachmentMetadata = await getMediaMetadataByPaths(attachmentPaths)
+  const metadataByPath = new Map(attachmentMetadata.map((item) => [item.file_path, item]))
+  const htmlWithAttachmentCards = renderAttachmentCardsInHtml(rendered.html, metadataByPath)
+
   return {
     ...rendered,
-    html: rendered.html.replace(/\uFEFF?\[TOC\]/gi, ''),
+    html: htmlWithAttachmentCards.replace(/\uFEFF?\[TOC\]/gi, ''),
     headings
   }
 }

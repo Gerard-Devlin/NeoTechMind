@@ -129,16 +129,6 @@ function formatDateTimeLocal(value?: string | null) {
       />
     </label>
 
-    <label class='flex flex-col gap-2 md:col-span-2'>
-      <span class='text-sm font-medium'>封面图 URL</span>
-      <input
-        class='rounded-xl border bg-background px-4 py-3'
-        name='heroImage'
-        value={item.hero_image || ''}
-        placeholder='/uploads/your-image.png'
-      />
-    </label>
-
     {
       item.source_path && (
         <label class='flex flex-col gap-2 md:col-span-2'>
@@ -153,10 +143,23 @@ function formatDateTimeLocal(value?: string | null) {
         <span class='text-sm font-medium'>正文 Markdown</span>
         <button
           id='editor-import-md-trigger'
-          class='rounded-full border px-3 py-1 text-xs hover:bg-muted/40'
+          class='inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs hover:bg-muted/40'
           type='button'
         >
-          导入 Markdown
+          <svg class='size-3.5' viewBox='0 0 20 20' fill='currentColor' aria-hidden='true'>
+            <path d='M5 2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.4a2 2 0 0 0-.58-1.41l-3.4-3.4A2 2 0 0 0 11.6 2H5Zm6.5 1.75V7h3.25L11.5 3.75ZM6.25 9a.75.75 0 0 1 .75-.75h6a.75.75 0 0 1 0 1.5H7A.75.75 0 0 1 6.25 9Zm0 3a.75.75 0 0 1 .75-.75h6a.75.75 0 0 1 0 1.5H7a.75.75 0 0 1-.75-.75Zm0 3a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 0 1.5H7a.75.75 0 0 1-.75-.75Z' />
+          </svg>
+          <span>导入 Markdown</span>
+        </button>
+        <button
+          id='editor-upload-file-trigger'
+          class='inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs hover:bg-muted/40'
+          type='button'
+        >
+          <svg class='size-3.5' viewBox='0 0 20 20' fill='currentColor' aria-hidden='true'>
+            <path d='M8.5 5a3.5 3.5 0 0 1 7 0v7a5.5 5.5 0 1 1-11 0V6a2.5 2.5 0 1 1 5 0v6.5a.5.5 0 0 1-1 0V6a1.5 1.5 0 1 0-3 0v6a4.5 4.5 0 1 0 9 0V5a2.5 2.5 0 0 0-5 0v7a.5.5 0 0 1-1 0V5Z' />
+          </svg>
+          <span>上传附件并插入</span>
         </button>
         <input
           id='editor-import-md-input'
@@ -164,6 +167,7 @@ function formatDateTimeLocal(value?: string | null) {
           type='file'
           accept='.md,.mdx,text/markdown,text/plain'
         />
+        <input id='editor-upload-file-input' class='hidden' type='file' multiple />
         <span id='editor-upload-status' class='text-xs text-muted-foreground' aria-live='polite'></span>
         <span id='editor-preview-status' class='text-xs text-muted-foreground' aria-live='polite'></span>
       </div>
@@ -192,8 +196,7 @@ function formatDateTimeLocal(value?: string | null) {
     >
       {submitLabel}
     </button>
-    <a class='rounded-full border px-5 py-3 hover:bg-muted/40' href='/admin/uploads'>上传图片</a>
-    <a class='rounded-full border px-5 py-3 hover:bg-muted/40' href='/admin'>返回后台</a>
+    <a class='rounded-full border px-5 py-3 hover:bg-muted/40' href='/admin'>← 返回后台</a>
   </div>
 </div>
 
@@ -206,6 +209,8 @@ function formatDateTimeLocal(value?: string | null) {
     const sectionInput = root.querySelector('input[name="sectionLabel"]')
     const importMdTrigger = document.getElementById('editor-import-md-trigger')
     const importMdInput = document.getElementById('editor-import-md-input')
+    const uploadFileTrigger = document.getElementById('editor-upload-file-trigger')
+    const uploadFileInput = document.getElementById('editor-upload-file-input')
     const statusNode = document.getElementById('editor-upload-status')
     const previewStatusNode = document.getElementById('editor-preview-status')
     const previewHost = document.getElementById('editor-live-preview')
@@ -216,7 +221,9 @@ function formatDateTimeLocal(value?: string | null) {
       !(textarea instanceof HTMLTextAreaElement) ||
       !(sectionInput instanceof HTMLInputElement) ||
       !(importMdTrigger instanceof HTMLButtonElement) ||
-      !(importMdInput instanceof HTMLInputElement)
+      !(importMdInput instanceof HTMLInputElement) ||
+      !(uploadFileTrigger instanceof HTMLButtonElement) ||
+      !(uploadFileInput instanceof HTMLInputElement)
     ) {
       return
     }
@@ -247,6 +254,20 @@ function formatDateTimeLocal(value?: string | null) {
       return normalized || 'image'
     }
 
+    const escapeMarkdownLinkText = (value: string) =>
+      String(value || '')
+        .replace(/\\/g, '\\\\')
+        .replace(/\[/g, '\\[')
+        .replace(/\]/g, '\\]')
+
+    const toAttachmentLabel = (name: string) => {
+      const normalized = String(name || '')
+        .replace(/\.[^.]+$/, '')
+        .replace(/[-_]+/g, ' ')
+        .trim()
+      return escapeMarkdownLinkText(normalized || 'attachment')
+    }
+
     const updatePreviewDom = (html: string, hasMermaid: boolean) => {
       if (!(previewMarkdown instanceof HTMLElement)) return
       previewMarkdown.innerHTML = html || '<p class="text-sm text-muted-foreground">暂无内容</p>'
@@ -255,9 +276,14 @@ function formatDateTimeLocal(value?: string | null) {
       syncFromEditor()
     }
 
-    const insertMarkdown = (markdown: string) => {
+    const insertMarkdown = (markdown: string, preferredPosition?: number | null) => {
       const source = textarea.value || ''
-      const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : source.length
+      const preferred = Number(preferredPosition)
+      const start = Number.isFinite(preferred)
+        ? Math.max(0, Math.min(source.length, preferred))
+        : Number.isFinite(textarea.selectionStart)
+          ? textarea.selectionStart
+          : source.length
       const end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : start
       const before = source.slice(0, start)
       const after = source.slice(end)
@@ -272,6 +298,7 @@ function formatDateTimeLocal(value?: string | null) {
       textarea.setSelectionRange(caret, caret)
       textarea.dispatchEvent(new Event('input', { bubbles: true }))
       textarea.focus()
+      return caret
     }
 
     const isMarkdownFile = (file: File) => {
@@ -834,7 +861,7 @@ function formatDateTimeLocal(value?: string | null) {
       return ''
     }
 
-    const uploadImageFile = async (file: File) => {
+    const uploadMediaFile = async (file: File) => {
       const sectionLabel = sectionInput.value.trim()
       if (!sectionLabel) {
         throw new Error('Please fill in the course name first.')
@@ -857,7 +884,12 @@ function formatDateTimeLocal(value?: string | null) {
         throw new Error(payload?.message || 'Upload failed, please try again later.')
       }
 
-      return String(payload.path)
+      return {
+        path: String(payload.path),
+        isImage: Boolean(payload?.isImage),
+        mimeType: String(payload?.mimeType || ''),
+        originalName: String(payload?.originalName || file.name || '')
+      }
     }
 
     const replaceInlineImageTargets = (content: string, replacements: Map<string, string>) => {
@@ -1004,7 +1036,8 @@ function formatDateTimeLocal(value?: string | null) {
 
           try {
             setStatus(`Uploading local image: ${fileRef.name}`)
-            const path = await uploadImageFile(fileRef)
+            const upload = await uploadMediaFile(fileRef)
+            const path = upload.path
             const keySet = buildReplacementKeys(ref, markdownDir)
             if (!keySet.length) keySet.push(ref)
             keySet.forEach((key) => {
@@ -1047,16 +1080,22 @@ function formatDateTimeLocal(value?: string | null) {
       return true
     }
 
-    const uploadSelectedFile = async (file: File) => {
+    const uploadSelectedFile = async (file: File, insertAt: number | null = null) => {
       setStatus('正在上传...')
 
       try {
-        const path = await uploadImageFile(file)
-        insertMarkdown(`![${toAltText(file.name)}](${path})`)
+        const upload = await uploadMediaFile(file)
+        const path = upload.path
+        const markdown = upload.isImage
+          ? `![${toAltText(file.name)}](${path})`
+          : `[${toAttachmentLabel(upload.originalName || file.name)}](${path})`
+        const nextCaret = insertMarkdown(markdown, insertAt)
         setStatus(`已插入 ${path}`)
+        return nextCaret
       } catch (error) {
         const message = error instanceof Error ? error.message : '上传失败，请稍后重试。'
         setStatus(message, true)
+        return insertAt ?? null
       }
     }
 
@@ -1172,6 +1211,49 @@ function formatDateTimeLocal(value?: string | null) {
       return Math.max(0, editorLineOffsets[safeLine - 1] || 0)
     }
 
+    const getIndexAtLineStart = (line: number) => {
+      const lines = String(textarea.value || '').split('\n')
+      const safeLine = Math.max(1, Math.min(lines.length, Number(line) || 1))
+      let index = 0
+      for (let cursor = 1; cursor < safeLine; cursor += 1) {
+        index += (lines[cursor - 1]?.length || 0) + 1
+      }
+      return index
+    }
+
+    const findEditorLineByOffset = (offset: number) => {
+      if (!editorLineOffsets.length) {
+        rebuildEditorLineOffsets()
+      }
+
+      const target = Math.max(0, Number(offset) || 0)
+      let left = 0
+      let right = editorLineOffsets.length - 1
+      let matched = 0
+
+      while (left <= right) {
+        const middle = Math.floor((left + right) / 2)
+        const current = editorLineOffsets[middle] || 0
+        if (current <= target) {
+          matched = middle
+          left = middle + 1
+        } else {
+          right = middle - 1
+        }
+      }
+
+      return matched + 1
+    }
+
+    const getDropInsertIndexForTextarea = (event: DragEvent) => {
+      const rect = textarea.getBoundingClientRect()
+      const style = window.getComputedStyle(textarea)
+      const paddingTop = Number.parseFloat(style.paddingTop || '0') || 0
+      const offsetTop = event.clientY - rect.top + textarea.scrollTop - paddingTop
+      const line = findEditorLineByOffset(offsetTop)
+      return getIndexAtLineStart(line)
+    }
+
     const getElementTopInside = (container: HTMLElement, element: HTMLElement) => {
       const containerRect = container.getBoundingClientRect()
       const elementRect = element.getBoundingClientRect()
@@ -1234,6 +1316,28 @@ function formatDateTimeLocal(value?: string | null) {
       }
 
       return matched
+    }
+
+    const getDropInsertIndexForPreview = (event: DragEvent) => {
+      if (!(previewHost instanceof HTMLElement)) return null
+      const anchors = getPreviewAnchors()
+      if (anchors.length === 0) return null
+
+      const y = event.clientY
+      let matched = anchors[0]
+      let minDistance = Number.POSITIVE_INFINITY
+
+      for (const anchor of anchors) {
+        const elementTop = getElementTopInside(previewHost, anchor.element) - previewHost.scrollTop
+        const viewportTop = previewHost.getBoundingClientRect().top + elementTop
+        const distance = Math.abs(viewportTop - y)
+        if (distance < minDistance) {
+          minDistance = distance
+          matched = anchor
+        }
+      }
+
+      return getIndexAtLineStart(matched.line)
     }
 
     const syncFromEditor = () => {
@@ -1334,6 +1438,22 @@ function formatDateTimeLocal(value?: string | null) {
       } finally {
         importMdInput.value = ''
       }
+    })
+
+    uploadFileTrigger.addEventListener('click', () => {
+      uploadFileInput.click()
+    })
+
+    uploadFileInput.addEventListener('change', async () => {
+      const files = Array.from(uploadFileInput.files || [])
+      if (files.length === 0) return
+
+      let cursor = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : null
+      for (const file of files) {
+        cursor = await uploadSelectedFile(file, cursor)
+      }
+
+      uploadFileInput.value = ''
     })
 
     textarea.addEventListener('input', () => {
@@ -1477,11 +1597,11 @@ function formatDateTimeLocal(value?: string | null) {
       return result
     }
 
-    const handleDroppedFiles = async (files: File[]) => {
+    const handleDroppedFiles = async (files: File[], insertAt: number | null = null) => {
       if (!files.length) return
 
       const markdownFiles = files.filter((file) => isMarkdownFile(file))
-      const imageFiles = files.filter((file) => isImageFile(file))
+      const mediaFiles = files.filter((file) => !isMarkdownFile(file))
 
       if (markdownFiles.length > 0) {
         try {
@@ -1496,9 +1616,10 @@ function formatDateTimeLocal(value?: string | null) {
         return
       }
 
-      if (imageFiles.length > 0) {
-        for (const file of imageFiles) {
-          await uploadSelectedFile(file)
+      if (mediaFiles.length > 0) {
+        let cursor = insertAt
+        for (const file of mediaFiles) {
+          cursor = await uploadSelectedFile(file, cursor)
         }
       }
     }
@@ -1508,17 +1629,27 @@ function formatDateTimeLocal(value?: string | null) {
         const transfer = event.dataTransfer
         if (!transfer || !hasFileInTransfer(transfer)) return
         event.preventDefault()
+        event.stopPropagation()
         transfer.dropEffect = 'copy'
       })
 
       target.addEventListener('drop', async (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+
         const transfer = event.dataTransfer
         if (!transfer) return
         const files = await extractFilesFromTransfer(transfer)
         if (files.length === 0) return
 
-        event.preventDefault()
-        await handleDroppedFiles(files)
+        let insertAt: number | null = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : null
+        if (target === textarea) {
+          insertAt = getDropInsertIndexForTextarea(event)
+        } else if (previewHost instanceof HTMLElement && target === previewHost) {
+          insertAt = getDropInsertIndexForPreview(event)
+        }
+
+        await handleDroppedFiles(files, insertAt)
       })
     }
 
@@ -1526,6 +1657,16 @@ function formatDateTimeLocal(value?: string | null) {
     if (previewHost instanceof HTMLElement) {
       bindFileDropTarget(previewHost)
     }
+
+    // Prevent browser default behavior that opens dropped files in a new tab.
+    document.addEventListener('dragover', (event) => {
+      if (!event.dataTransfer || !hasFileInTransfer(event.dataTransfer)) return
+      event.preventDefault()
+    })
+    document.addEventListener('drop', (event) => {
+      if (!event.dataTransfer || !hasFileInTransfer(event.dataTransfer)) return
+      event.preventDefault()
+    })
 
     if ('ResizeObserver' in window) {
       lineResizeObserver = new ResizeObserver(() => {
@@ -1570,4 +1711,5 @@ function formatDateTimeLocal(value?: string | null) {
     }
   }
 </style>
+
 

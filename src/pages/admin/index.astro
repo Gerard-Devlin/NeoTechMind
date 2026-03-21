@@ -34,7 +34,7 @@ function buildNewDocHref(courseLabel = '') {
     <section class='admin-top'>
       <div>
         <p class='admin-kicker'>Admin</p>
-        <h1 class='admin-title'>课程与文档管理</h1>
+        <h1 class='admin-title'>文档管理</h1>
         <p class='admin-desc'>
           当前登录：{session.username}（{isAdmin ? '管理员' : '普通用户'}）
         </p>
@@ -117,13 +117,29 @@ function buildNewDocHref(courseLabel = '') {
 
                   <div class='admin-toolbar'>
                     <a class='admin-btn' href={buildNewDocHref(course.label)}>
-                      + 添加文章
+                      <svg class='admin-btn-icon' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+                        <path
+                          d='M12 5v14M5 12h14'
+                          stroke='currentColor'
+                          stroke-width='1.8'
+                          stroke-linecap='round'
+                        />
+                      </svg>
+                      添加文章
                     </a>
                     <a
                       class='admin-btn'
                       href={course.docs[0] ? `/docs/${course.docs[0].slug}` : '/docs'}
                       target='_blank'
                     >
+                      <svg class='admin-btn-icon' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+                        <path
+                          d='M2.75 12s3.6-6.25 9.25-6.25S21.25 12 21.25 12s-3.6 6.25-9.25 6.25S2.75 12 2.75 12Z'
+                          stroke='currentColor'
+                          stroke-width='1.75'
+                        />
+                        <circle cx='12' cy='12' r='2.8' stroke='currentColor' stroke-width='1.75' />
+                      </svg>
                       预览课程
                     </a>
                     {isAdmin && (
@@ -133,6 +149,15 @@ function buildNewDocHref(courseLabel = '') {
                         data-course-key={course.key}
                         data-course-label={course.label}
                       >
+                        <svg class='admin-btn-icon' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+                          <path
+                            d='M4 20h4.2l9.9-9.9a1.9 1.9 0 0 0 0-2.7l-1.5-1.5a1.9 1.9 0 0 0-2.7 0L4 15.8V20Z'
+                            stroke='currentColor'
+                            stroke-width='1.75'
+                            stroke-linejoin='round'
+                          />
+                          <path d='m12.9 6.9 4.2 4.2' stroke='currentColor' stroke-width='1.75' />
+                        </svg>
                         重命名课程
                       </button>
                     )}
@@ -143,6 +168,14 @@ function buildNewDocHref(courseLabel = '') {
                         data-course-key={course.key}
                         data-course-label={course.label}
                       >
+                        <svg class='admin-btn-icon' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+                          <path
+                            d='M4 12s3.3-5.75 8-5.75S20 12 20 12s-3.3 5.75-8 5.75S4 12 4 12Z'
+                            stroke='currentColor'
+                            stroke-width='1.75'
+                          />
+                          <path d='M5 5l14 14' stroke='currentColor' stroke-width='1.75' stroke-linecap='round' />
+                        </svg>
                         隐藏课程
                       </button>
                     )}
@@ -153,6 +186,21 @@ function buildNewDocHref(courseLabel = '') {
                         data-course-key={course.key}
                         data-course-label={course.label}
                       >
+                        <svg class='admin-btn-icon' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+                          <path
+                            d='M2.75 12s3.6-6.25 9.25-6.25S21.25 12 21.25 12s-3.6 6.25-9.25 6.25S2.75 12 2.75 12Z'
+                            stroke='currentColor'
+                            stroke-width='1.75'
+                          />
+                          <circle cx='12' cy='12' r='2.8' stroke='currentColor' stroke-width='1.75' />
+                          <path
+                            d='m10.8 12 1 1 1.8-2'
+                            stroke='currentColor'
+                            stroke-width='1.7'
+                            stroke-linecap='round'
+                            stroke-linejoin='round'
+                          />
+                        </svg>
                         显示课程
                       </button>
                     )}
@@ -629,5 +677,11 @@ function buildNewDocHref(courseLabel = '') {
     display: flex;
     flex-wrap: wrap;
     gap: 0.55rem;
+  }
+  .admin-btn-icon {
+    width: 0.92rem;
+    height: 0.92rem;
+    flex: 0 0 auto;
+    opacity: 0.95;
   }
 </style>

@@ -74,10 +74,12 @@ let homepageDescription = await getHomepageDescription()
 let siteTitle = branding.siteTitle || config.title
 let siteFaviconHref = branding.siteFaviconHref || defaultFaviconHref
 let homepageLogoSrc = branding.homepageLogoSrc || config.logo.src
+let homepageStatusText = branding.homepageStatusText || '课程内容持续更新中'
 
 if (Astro.request.method === 'POST') {
   const formData = await Astro.request.formData()
   const nextHomepageDescription = String(formData.get('homepageDescription') || '')
+  const nextHomepageStatusText = String(formData.get('homepageStatusText') || '')
   const nextSiteTitle = String(formData.get('siteTitle') || '')
   const faviconFile = formData.get('siteFaviconFile')
   const homepageLogoFile = formData.get('homepageLogoFile')
@@ -105,6 +107,7 @@ if (Astro.request.method === 'POST') {
     const updated = await updateSiteSettings(
       {
         homepageDescription: nextHomepageDescription,
+        homepageStatusText: nextHomepageStatusText,
         siteTitle: nextSiteTitle,
         siteFaviconHref: nextSiteFaviconHref,
         homepageLogoSrc: nextHomepageLogoSrc
@@ -116,6 +119,7 @@ if (Astro.request.method === 'POST') {
     siteTitle = updated.siteTitle
     siteFaviconHref = updated.siteFaviconHref || defaultFaviconHref
     homepageLogoSrc = updated.homepageLogoSrc || config.logo.src
+    homepageStatusText = updated.homepageStatusText || '课程内容持续更新中'
     success = '站点设置已更新。'
   } catch (cause) {
     error = cause instanceof Error ? cause.message : '保存失败。'
@@ -132,7 +136,7 @@ if (Astro.request.method === 'POST') {
         <p class='admin-desc'>支持修改站点名称、首页说明，并直接上传 favicon 与首页顶部图。</p>
       </div>
       <div class='admin-toolbar'>
-        <a class='admin-btn' href='/admin'>返回后台</a>
+        <a class='admin-btn' href='/admin'>← 返回后台</a>
       </div>
     </section>
 
@@ -163,6 +167,19 @@ if (Astro.request.method === 'POST') {
           <span>上传首页顶部图（可选）</span>
           <input class='admin-input' type='file' name='homepageLogoFile' accept='image/*' />
           <p class='admin-muted text-xs'>当前：<code>{homepageLogoSrc}</code></p>
+        </label>
+
+        <label class='admin-label'>
+          <span>首页状态提示文案</span>
+          <input
+            class='admin-input'
+            type='text'
+            name='homepageStatusText'
+            maxlength='120'
+            required
+            value={homepageStatusText}
+          />
+          <p class='admin-muted text-xs'>用于首页头像下方那句提示，例如“课程内容持续更新中”。</p>
         </label>
 
         <label class='admin-label'>
