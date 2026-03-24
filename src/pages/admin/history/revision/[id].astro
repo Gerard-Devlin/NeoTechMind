@@ -1,0 +1,123 @@
+---
+import { BackToTop } from 'astro-pure/components/pages'
+import { MediumZoom } from 'astro-pure/advanced'
+import config from 'virtual:config'
+import PageLayout from '@/layouts/BaseLayout.astro'
+import MarkdownContent from '@/components/dynamic/MarkdownContent.astro'
+import TableOfContents from '@/components/dynamic/TableOfContents.astro'
+import { getSessionFromCookies, isAdminSession } from '@/lib/server/auth.mjs'
+import { getContentRevisionById } from '@/lib/server/content.mjs'
+import { renderMarkdown } from '@/lib/server/markdown.mjs'
+
+function safeDate(value: string) {
+  const date = new Date(String(value || ''))
+  if (Number.isNaN(date.valueOf())) return '-'
+  return date.toLocaleString('zh-CN')
+}
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+if (!isAdminSession(session)) {
+  return Astro.redirect('/admin')
+}
+
+const revisionId = Number(Astro.params.id || 0)
+const revision = Number.isInteger(revisionId) && revisionId > 0 ? await getContentRevisionById(revisionId) : null
+const snapshot = (revision?.snapshot || {}) as Record<string, any>
+const title = String(snapshot.title || revision?.content_slug || `历史记录 #${revisionId}`)
+const slug = String(snapshot.slug || revision?.content_slug || '')
+const content = String(snapshot.content || '')
+const rendered = revision ? await renderMarkdown(content) : { html: '', headings: [], hasMermaid: false }
+
+if (!revision) {
+  Astro.response.status = 404
+}
+---
+
+<PageLayout
+  meta={{
+    title: revision ? `${title} · 历史快照` : '历史记录不存在',
+    description: revision ? `历史记录 #${revisionId}` : '没有找到对应的历史记录'
+  }}
+  containerClass='max-w-[88rem]'
+>
+  <main class='py-8'>
+    {
+      revision ? (
+        <div class='bb-history-shell'>
+          <section class='min-w-0'>
+            <div id='content-header' class='animate'>
+              <nav class='flex flex-wrap items-center gap-2 text-sm text-muted-foreground'>
+                <a class='hover:text-foreground' href='/admin'>Admin</a>
+                <span>·</span>
+                <a class='hover:text-foreground' href='/admin/history'>历史记录</a>
+                <span>·</span>
+                <span>#{revision.id}</span>
+              </nav>
+
+              <p class='mt-5 text-sm uppercase tracking-[0.2em] text-muted-foreground'>Revision Snapshot</p>
+              <h1 class='mt-3 text-3xl font-semibold sm:text-4xl'>{title}</h1>
+              <p class='mt-3 text-sm text-muted-foreground'>
+                slug: {slug || '-'} · 保存时间: {safeDate(revision.created_at)} · 来源: {revision.reason || '-'}
+              </p>
+            </div>
+
+            <article id='content' class='mt-8 min-w-0'>
+              <MarkdownContent
+                html={rendered.html || '<p class="text-sm text-muted-foreground">此版本没有正文内容。</p>'}
+                hasMermaid={rendered.hasMermaid}
+              />
+            </article>
+          </section>
+
+          <aside
+            class='animate top-20 z-30 min-w-48 overflow-y-scroll max-lg:hidden md:sticky lg:shrink-0'
+            style='height:calc(100vh - 7rem);'
+          >
+            {rendered.headings.length > 0 && <TableOfContents headings={rendered.headings} />}
+          </aside>
+        </div>
+      ) : (
+        <section class='rounded-[2rem] border p-8'>
+          <p class='text-sm text-muted-foreground'>404</p>
+          <h1 class='mt-3 text-3xl font-semibold'>历史记录不存在</h1>
+          <p class='mt-4 text-muted-foreground'>没有找到对应的历史快照，可能参数不正确。</p>
+          <div class='mt-6'>
+            <a class='admin-btn' href='/admin/history'>← 返回历史记录</a>
+          </div>
+        </section>
+      )
+    }
+  </main>
+  <BackToTop header='content-header' content='content' />
+</PageLayout>
+
+{config.integ.mediumZoom.enable && <MediumZoom background='#fff' />}
+
+<style>
+  .bb-history-shell {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  @media (min-width: 1024px) {
+    .bb-history-shell {
+      grid-template-columns: minmax(0, 1fr) 15rem;
+      align-items: start;
+    }
+  }
+
+  @media (min-width: 1280px) {
+    .bb-history-shell {
+      grid-template-columns: minmax(0, 1fr) 16rem;
+      gap: 2rem;
+    }
+  }
+
+  .bb-history-shell :global(toc-heading) {
+    display: block;
+    padding-right: 0.25rem;
+  }
+</style>

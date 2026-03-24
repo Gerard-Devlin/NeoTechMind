@@ -196,6 +196,65 @@ async function initializePostgres() {
 
     CREATE INDEX IF NOT EXISTS idx_media_files_file_path
       ON media_files(file_path);
+
+    CREATE TABLE IF NOT EXISTS content_item_revisions (
+      id BIGSERIAL PRIMARY KEY,
+      content_id BIGINT,
+      content_slug TEXT,
+      content_type TEXT,
+      action TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      actor_user_id BIGINT,
+      actor_role TEXT,
+      reason TEXT,
+      meta TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_content_item_revisions_content_id
+      ON content_item_revisions(content_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_content_item_revisions_content_slug
+      ON content_item_revisions(content_slug, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS course_section_revisions (
+      id BIGSERIAL PRIMARY KEY,
+      section_key TEXT NOT NULL,
+      label TEXT,
+      action TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      actor_user_id BIGINT,
+      actor_role TEXT,
+      reason TEXT,
+      meta TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_course_section_revisions_section_key
+      ON course_section_revisions(section_key, created_at DESC);
+  `)
+
+  await sql.unsafe(`
+    CREATE OR REPLACE FUNCTION prevent_revision_mutation()
+    RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'Revision history is read-only and cannot be modified or deleted.';
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_content_item_revisions_readonly
+      ON content_item_revisions;
+    CREATE TRIGGER trg_content_item_revisions_readonly
+      BEFORE UPDATE OR DELETE ON content_item_revisions
+      FOR EACH ROW
+      EXECUTE FUNCTION prevent_revision_mutation();
+
+    DROP TRIGGER IF EXISTS trg_course_section_revisions_readonly
+      ON course_section_revisions;
+    CREATE TRIGGER trg_course_section_revisions_readonly
+      BEFORE UPDATE OR DELETE ON course_section_revisions
+      FOR EACH ROW
+      EXECUTE FUNCTION prevent_revision_mutation();
   `)
 
   await sql.unsafe(`

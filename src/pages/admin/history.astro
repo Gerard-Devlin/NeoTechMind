@@ -1,0 +1,285 @@
+---
+import PageLayout from '@/layouts/BaseLayout.astro'
+import { getSessionFromCookies, isAdminSession, listAdminUsers } from '@/lib/server/auth.mjs'
+import { listContentRevisions, listCourseSectionRevisions } from '@/lib/server/content.mjs'
+import '@/assets/styles/admin.css'
+
+function clampLimit(value: string, fallback = 120) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(20, Math.min(500, Math.trunc(parsed)))
+}
+
+function formatDateTime(value: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.valueOf())) return '-'
+  return date.toLocaleString('zh-CN')
+}
+
+function summarizeContentSnapshot(snapshot: Record<string, any>) {
+  return {
+    title: String(snapshot?.title || ''),
+    slug: String(snapshot?.slug || ''),
+    type: String(snapshot?.type || ''),
+    status: String(snapshot?.status || ''),
+    sectionLabel: String(snapshot?.section_label || '')
+  }
+}
+
+function summarizeCourseSnapshot(snapshot: Record<string, any>) {
+  return {
+    sectionKey: String(snapshot?.section_key || ''),
+    label: String(snapshot?.label || '')
+  }
+}
+
+const session = await getSessionFromCookies(Astro.cookies)
+if (!session) {
+  return Astro.redirect('/admin/login')
+}
+if (!isAdminSession(session)) {
+  return Astro.redirect('/admin')
+}
+
+const typeParam = String(Astro.url.searchParams.get('type') || 'content').trim().toLowerCase()
+const viewType: 'content' | 'course' = typeParam === 'course' ? 'course' : 'content'
+const entity = String(Astro.url.searchParams.get('entity') || '').trim()
+const limit = clampLimit(String(Astro.url.searchParams.get('limit') || '120'))
+const isNumericEntity = /^\d+$/.test(entity)
+
+const users = await listAdminUsers()
+const usernameById = new Map(users.map((user: any) => [Number(user.id), String(user.username || '')]))
+const contentQuery: Record<string, any> = { limit }
+if (entity) {
+  if (isNumericEntity) {
+    contentQuery.contentId = Number(entity)
+  } else {
+    contentQuery.slug = entity
+  }
+}
+
+const [contentRevisions, courseRevisions] = await Promise.all([
+  viewType === 'content' ? listContentRevisions(contentQuery) : Promise.resolve([]),
+  viewType === 'course' ? listCourseSectionRevisions(entity, limit) : Promise.resolve([])
+])
+
+const historyCount = viewType === 'content' ? contentRevisions.length : courseRevisions.length
+---
+
+<PageLayout meta={{ title: '历史记录', description: 'Admin revision history' }} containerClass='max-w-[96rem]'>
+  <main class='admin-page py-7 md:py-8'>
+    <section class='admin-top'>
+      <div>
+        <p class='admin-kicker'>Admin</p>
+        <h1 class='admin-title'>历史记录</h1>
+        <p class='admin-desc'>只读日志，不可修改、不可删除。</p>
+      </div>
+      <div class='admin-toolbar'>
+        <a class='admin-btn' href='/admin'>← 返回后台</a>
+      </div>
+    </section>
+
+    <section class='admin-card mt-6 p-5 md:p-6'>
+      <form class='history-filter' method='get'>
+        <label class='admin-label'>
+          <span>日志类型</span>
+          <select class='admin-input' name='type'>
+            <option value='content' selected={viewType === 'content'}>文档日志</option>
+            <option value='course' selected={viewType === 'course'}>课程日志</option>
+          </select>
+        </label>
+
+        <label class='admin-label'>
+          <span>{viewType === 'content' ? '文档 ID / slug（可选）' : '课程 key（可选）'}</span>
+          <input
+            class='admin-input'
+            name='entity'
+            value={entity}
+            placeholder={viewType === 'content' ? '如：123 或 dsa-prefix-sum' : '如：dsa'}
+          />
+        </label>
+
+        <label class='admin-label'>
+          <span>条数</span>
+          <input class='admin-input' type='number' name='limit' min='20' max='500' value={String(limit)} />
+        </label>
+
+        <div class='history-filter-actions'>
+          <button class='admin-btn admin-btn-primary' type='submit'>查询</button>
+        </div>
+      </form>
+
+      <p class='admin-note mt-4'>当前共 {historyCount} 条记录。</p>
+    </section>
+
+    <section class='admin-card mt-6 overflow-hidden'>
+      {viewType === 'content' ? (
+        <div class='history-table-wrap'>
+          <table class='history-table'>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>对象</th>
+                <th>操作者</th>
+                <th>说明</th>
+                <th>详情</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contentRevisions.length === 0 ? (
+                <tr>
+                  <td colspan='5' class='history-empty'>暂无记录</td>
+                </tr>
+              ) : (
+                contentRevisions.map((row: any) => {
+                  const snapshot = summarizeContentSnapshot(row.snapshot || {})
+                  const actorName = row.actor_user_id
+                    ? usernameById.get(Number(row.actor_user_id)) || `ID ${row.actor_user_id}`
+                    : row.actor_role === 'system'
+                      ? 'System'
+                      : '-'
+                  const targetText = snapshot.title
+                    ? `${snapshot.title} (${snapshot.slug || '-'})`
+                    : row.content_slug || '-'
+
+                  return (
+                    <tr>
+                      <td>{formatDateTime(String(row.created_at || ''))}</td>
+                      <td>
+                        <div class='history-target'>
+                          <p>{targetText}</p>
+                          <p class='history-subtle'>
+                            {snapshot.type || '-'} · 状态 {snapshot.status || '-'}
+                            {snapshot.sectionLabel ? ` · ${snapshot.sectionLabel}` : ''}
+                          </p>
+                        </div>
+                      </td>
+                      <td>{actorName}</td>
+                      <td>{String(row.reason || '-')}</td>
+                      <td>
+                        <a class='admin-btn admin-btn-sm' href={`/admin/history/revision/${Number(row.id)}`}>
+                          查看
+                        </a>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div class='history-table-wrap'>
+          <table class='history-table'>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>课程</th>
+                <th>操作者</th>
+                <th>说明</th>
+                <th>详情</th>
+              </tr>
+            </thead>
+            <tbody>
+              {courseRevisions.length === 0 ? (
+                <tr>
+                  <td colspan='5' class='history-empty'>暂无记录</td>
+                </tr>
+              ) : (
+                courseRevisions.map((row: any) => {
+                  const snapshot = summarizeCourseSnapshot(row.snapshot || {})
+                  const actorName = row.actor_user_id
+                    ? usernameById.get(Number(row.actor_user_id)) || `ID ${row.actor_user_id}`
+                    : row.actor_role === 'system'
+                      ? 'System'
+                      : '-'
+
+                  return (
+                    <tr>
+                      <td>{formatDateTime(String(row.created_at || ''))}</td>
+                      <td>
+                        <div class='history-target'>
+                          <p>{snapshot.label || row.label || '-'}</p>
+                          <p class='history-subtle'>{snapshot.sectionKey || row.section_key || '-'}</p>
+                        </div>
+                      </td>
+                      <td>{actorName}</td>
+                      <td>{String(row.reason || '-')}</td>
+                      <td>无正文</td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  </main>
+</PageLayout>
+
+<style>
+  .history-filter {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  @media (min-width: 900px) {
+    .history-filter {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 0.8fr) auto;
+      align-items: end;
+    }
+  }
+
+  .history-filter-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .history-table-wrap {
+    overflow-x: auto;
+  }
+
+  .history-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: collapse;
+  }
+
+  .history-table th,
+  .history-table td {
+    border-bottom: 1px solid hsl(var(--border));
+    padding: 0.72rem 0.8rem;
+    vertical-align: top;
+    text-align: left;
+    font-size: 0.9rem;
+  }
+
+  .history-table thead th {
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.14);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .history-empty {
+    text-align: center;
+    color: hsl(var(--muted-foreground));
+    padding: 1.2rem 0.8rem !important;
+  }
+
+  .history-target p {
+    margin: 0;
+    line-height: 1.45;
+    word-break: break-word;
+  }
+
+  .history-subtle {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.76rem;
+  }
+</style>

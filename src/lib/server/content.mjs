@@ -492,6 +492,23 @@ async function ensureCourseSectionIntegrity() {
              WHERE section = ?`,
             [canonical.key, canonical.label, duplicate.key]
           )
+          await appendCourseSectionRevision({
+            sectionKey: duplicate.key,
+            label: duplicate.label,
+            action: 'delete',
+            actor: null,
+            reason: 'duplicate course merged by integrity cleanup',
+            meta: {
+              source: 'ensureCourseSectionIntegrity',
+              mergedInto: canonical.key,
+              mergedIntoLabel: canonical.label
+            },
+            snapshot: {
+              section_key: duplicate.key,
+              label: duplicate.label,
+              sort_order: duplicate.sort_order
+            }
+          })
           await dbRun(`DELETE FROM course_sections WHERE section_key = ?`, [duplicate.key])
         }
       }
@@ -511,7 +528,7 @@ function applySectionOrder(docs, sectionRecords) {
   }))
 }
 
-async function ensureCourseSection(sectionKey, label) {
+async function ensureCourseSection(sectionKey, label, actor = null) {
   const existing = await dbGet(
     `SELECT section_key, label, sort_order
      FROM course_sections
@@ -522,6 +539,22 @@ async function ensureCourseSection(sectionKey, label) {
   if (existing) {
     if (existing.label !== label) {
       await dbRun(`UPDATE course_sections SET label = ? WHERE section_key = ?`, [label, sectionKey])
+      await appendCourseSectionRevision({
+        sectionKey,
+        label,
+        action: 'rename',
+        actor,
+        reason: 'course label synced while saving content',
+        meta: {
+          previousLabel: String(existing.label || ''),
+          nextLabel: String(label || '')
+        },
+        snapshot: {
+          section_key: sectionKey,
+          label,
+          sort_order: Number(existing.sort_order ?? 999)
+        }
+      })
     }
     return {
       key: String(existing.section_key),
@@ -538,6 +571,19 @@ async function ensureCourseSection(sectionKey, label) {
      VALUES (?, ?, ?)`,
     [sectionKey, label, nextOrder]
   )
+
+  await appendCourseSectionRevision({
+    sectionKey,
+    label,
+    action: 'create',
+    actor,
+    reason: 'course created while saving content',
+    snapshot: {
+      section_key: sectionKey,
+      label,
+      sort_order: nextOrder
+    }
+  })
 
   return {
     key: sectionKey,
@@ -702,6 +748,153 @@ function buildSearchSnippet(content, query) {
 function countRowValue(row) {
   const value = row?.count ?? row?.COUNT ?? row?.total ?? 0
   return Number(value || 0)
+}
+
+function normalizeRevisionActorRole(actor) {
+  const role = String(actor?.role || '').toLowerCase()
+  if (role === 'admin' || role === 'editor') return role
+  return actor ? 'editor' : 'system'
+}
+
+function normalizeRevisionMeta(meta) {
+  if (!meta || typeof meta !== 'object') return null
+  try {
+    return JSON.stringify(meta)
+  } catch {
+    return null
+  }
+}
+
+function parseRevisionJson(value, fallback = null) {
+  if (!value) return fallback
+  try {
+    return JSON.parse(String(value))
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeContentRevisionSnapshot(content) {
+  const hydrated = content?.navPath ? content : hydrateContentRow(content)
+  if (!hydrated?.id) return null
+
+  const navPath = Array.isArray(hydrated.navPath)
+    ? normalizeNavPath(hydrated.navPath)
+    : normalizeNavPath(parseRevisionJson(hydrated.nav_path, []))
+
+  return {
+    id: Number(hydrated.id),
+    type: String(hydrated.type || ''),
+    title: String(hydrated.title || ''),
+    slug: String(hydrated.slug || ''),
+    subtitle: hydrated.subtitle ? String(hydrated.subtitle) : null,
+    summary: String(hydrated.summary || ''),
+    content: String(hydrated.content || ''),
+    status: String(hydrated.status || 'draft'),
+    tags: Array.isArray(hydrated.tags) ? hydrated.tags : [],
+    hero_image: hydrated.hero_image ? String(hydrated.hero_image) : null,
+    source_path: hydrated.source_path ? String(hydrated.source_path) : null,
+    section: hydrated.section ? String(hydrated.section) : null,
+    section_label: hydrated.section_label ? String(hydrated.section_label) : null,
+    nav_path: [...navPath],
+    nav_order: Number(hydrated.nav_order ?? 999),
+    nav_sequence:
+      hydrated.nav_sequence === null || hydrated.nav_sequence === undefined
+        ? null
+        : Number(hydrated.nav_sequence),
+    created_by_user_id: normalizeUserId(hydrated.created_by_user_id),
+    created_at: hydrated.created_at ? String(hydrated.created_at) : null,
+    updated_at: hydrated.updated_at ? String(hydrated.updated_at) : null,
+    published_at: hydrated.published_at ? String(hydrated.published_at) : null,
+    is_imported: Boolean(hydrated.is_imported),
+    captured_at: nowIso()
+  }
+}
+
+function normalizeCourseRevisionSnapshot(snapshotInput = {}) {
+  return {
+    section_key: String(snapshotInput.section_key || snapshotInput.key || '').trim(),
+    label: String(snapshotInput.label || '').trim(),
+    sort_order:
+      snapshotInput.sort_order === null || snapshotInput.sort_order === undefined
+        ? null
+        : Number(snapshotInput.sort_order),
+    captured_at: nowIso()
+  }
+}
+
+async function appendContentRevision({ content, action, actor = null, reason = '', meta = null }) {
+  const snapshot = normalizeContentRevisionSnapshot(content)
+  if (!snapshot) return
+
+  const normalizedActor = normalizeActor(actor)
+  await dbRun(
+    `INSERT INTO content_item_revisions (
+       content_id,
+       content_slug,
+       content_type,
+       action,
+       snapshot,
+       actor_user_id,
+       actor_role,
+       reason,
+       meta,
+       created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      snapshot.id,
+      snapshot.slug,
+      snapshot.type,
+      String(action || 'update'),
+      JSON.stringify(snapshot),
+      normalizedActor?.userId ?? null,
+      normalizeRevisionActorRole(actor),
+      String(reason || '').trim() || null,
+      normalizeRevisionMeta(meta),
+      nowIso()
+    ]
+  )
+}
+
+async function appendCourseSectionRevision({
+  sectionKey,
+  label = '',
+  action,
+  actor = null,
+  reason = '',
+  meta = null,
+  snapshot = null
+}) {
+  const key = String(sectionKey || '').trim()
+  if (!key) return
+
+  const normalizedActor = normalizeActor(actor)
+  const normalizedSnapshot = normalizeCourseRevisionSnapshot(snapshot || { section_key: key, label })
+
+  await dbRun(
+    `INSERT INTO course_section_revisions (
+       section_key,
+       label,
+       action,
+       snapshot,
+       actor_user_id,
+       actor_role,
+       reason,
+       meta,
+       created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      key,
+      String(label || normalizedSnapshot.label || ''),
+      String(action || 'update'),
+      JSON.stringify(normalizedSnapshot),
+      normalizedActor?.userId ?? null,
+      normalizeRevisionActorRole(actor),
+      String(reason || '').trim() || null,
+      normalizeRevisionMeta(meta),
+      nowIso()
+    ]
+  )
 }
 
 async function getSiteSettingValue(settingKey) {
@@ -1721,7 +1914,7 @@ export async function saveContent(input, actor) {
 
   if (serialized.type === 'doc') {
     serialized.section = await resolveCourseSectionKey(serialized.section_label, input.section, current)
-    await ensureCourseSection(serialized.section, serialized.section_label)
+    await ensureCourseSection(serialized.section, serialized.section_label, normalizedActor)
   }
 
   const duplicate = input.id
@@ -1781,6 +1974,17 @@ export async function saveContent(input, actor) {
 
     const saved = await getContentById(current.id)
     const synced = await syncContentMediaLinks(saved)
+    if (synced) {
+      await appendContentRevision({
+        content: synced,
+        action: 'update',
+        actor: normalizedActor,
+        reason: 'content updated from admin editor',
+        meta: {
+          source: 'saveContent'
+        }
+      })
+    }
     await cleanupUnreferencedUploadMedia()
     return synced
   }
@@ -1835,12 +2039,38 @@ export async function saveContent(input, actor) {
 
   const created = await getContentById(inserted.id)
   const synced = await syncContentMediaLinks(created)
+  if (synced) {
+    await appendContentRevision({
+      content: synced,
+      action: 'create',
+      actor: normalizedActor,
+      reason: 'content created from admin editor',
+      meta: {
+        source: 'saveContent'
+      }
+    })
+  }
   await cleanupUnreferencedUploadMedia()
   return synced
 }
 
-export async function deleteImportedDocs() {
-  await dbRun(`DELETE FROM content_items WHERE type = 'doc' AND is_imported = ?`, [true])
+export async function deleteImportedDocs(actor = null) {
+  const importedRows = await dbAll(`SELECT * FROM content_items WHERE type = 'doc' AND is_imported = ?`, [true])
+  for (const row of importedRows) {
+    await appendContentRevision({
+      content: hydrateContentRow(row),
+      action: 'delete',
+      actor,
+      reason: 'imported document removed during re-import',
+      meta: {
+        source: 'deleteImportedDocs',
+        imported: true
+      }
+    })
+  }
+
+  const result = await dbRun(`DELETE FROM content_items WHERE type = 'doc' AND is_imported = ?`, [true])
+  return Number(result.rowCount || 0)
 }
 
 export async function deleteContentById(id, actor) {
@@ -1851,6 +2081,16 @@ export async function deleteContentById(id, actor) {
   if (!actorCanManageRecord(actor, current)) {
     throw new Error('No permission to delete this document.')
   }
+
+  await appendContentRevision({
+    content: current,
+    action: 'delete',
+    actor,
+    reason: 'content deleted from admin',
+    meta: {
+      source: 'deleteContentById'
+    }
+  })
 
   const mediaRows = await dbAll(
     `SELECT id, file_path
@@ -1880,13 +2120,38 @@ export async function deleteContentById(id, actor) {
 }
 
 export async function reorderCourseDocs(sectionKey, itemIds, actor) {
+  const normalizedActor = normalizeActor(actor)
   const docs = filterDocsByActor(await getSectionDocs(sectionKey, true), actor)
   const targetIds = itemIds.map((id) => Number(id)).filter(Number.isFinite)
   const docIds = new Set(docs.map((doc) => Number(doc.id)))
   const normalized = targetIds.filter((id) => docIds.has(id))
+  const previousSequenceById = new Map(docs.map((doc) => [Number(doc.id), doc.nav_sequence]))
+  const nextSequenceById = new Map()
 
   for (const [index, id] of normalized.entries()) {
     await dbRun(`UPDATE content_items SET nav_sequence = ? WHERE id = ?`, [index, id])
+    nextSequenceById.set(Number(id), index)
+  }
+
+  for (const id of normalized) {
+    const previousSequence = previousSequenceById.get(Number(id))
+    const nextSequence = nextSequenceById.get(Number(id))
+    if (previousSequence === nextSequence) continue
+
+    const updated = await getContentById(Number(id))
+    if (!updated) continue
+    await appendContentRevision({
+      content: updated,
+      action: 'reorder',
+      actor: normalizedActor,
+      reason: 'document order changed within course',
+      meta: {
+        source: 'reorderCourseDocs',
+        sectionKey: String(sectionKey || ''),
+        previousSequence: previousSequence ?? null,
+        nextSequence: nextSequence ?? null
+      }
+    })
   }
 }
 
@@ -1899,9 +2164,38 @@ export async function reorderCourseSections(sectionKeys, actor) {
   const records = await fetchCourseSections()
   const validKeys = new Set(records.map((record) => record.key))
   const normalized = sectionKeys.map((key) => String(key)).filter((key) => validKeys.has(key))
+  const previousOrderByKey = new Map(records.map((record) => [record.key, Number(record.sort_order ?? 999)]))
 
   for (const [index, key] of normalized.entries()) {
     await dbRun(`UPDATE course_sections SET sort_order = ? WHERE section_key = ?`, [index, key])
+  }
+
+  const updatedSections = await fetchCourseSections()
+  const updatedMap = new Map(updatedSections.map((section) => [section.key, section]))
+
+  for (const [index, key] of normalized.entries()) {
+    const previousOrder = previousOrderByKey.get(key)
+    if (previousOrder === index) continue
+    const updated = updatedMap.get(key)
+    if (!updated) continue
+
+    await appendCourseSectionRevision({
+      sectionKey: key,
+      label: updated.label,
+      action: 'reorder',
+      actor: normalizedActor,
+      reason: 'course order changed',
+      meta: {
+        source: 'reorderCourseSections',
+        previousOrder: previousOrder ?? null,
+        nextOrder: index
+      },
+      snapshot: {
+        section_key: updated.key,
+        label: updated.label,
+        sort_order: Number(updated.sort_order ?? index)
+      }
+    })
   }
 }
 
@@ -1943,6 +2237,12 @@ export async function renameCourseSection(sectionKey, nextLabel, actor) {
   }
 
   const previousLabel = String(current.label || '').trim()
+  const beforeRows = await dbAll(
+    `SELECT *
+     FROM content_items
+     WHERE type = 'doc' AND section = ?`,
+    [key]
+  )
 
   await dbRun(`UPDATE course_sections SET label = ? WHERE section_key = ?`, [label, key])
   await dbRun(`UPDATE content_items SET section_label = ? WHERE section = ?`, [label, key])
@@ -1972,6 +2272,47 @@ export async function renameCourseSection(sectionKey, nextLabel, actor) {
     await dbRun(`UPDATE content_items SET nav_path = ? WHERE id = ?`, [JSON.stringify(navPath), Number(row.id)])
   }
 
+  const updatedRows = await dbAll(
+    `SELECT *
+     FROM content_items
+     WHERE type = 'doc' AND section = ?`,
+    [key]
+  )
+  const previousById = new Map(beforeRows.map((row) => [Number(row.id), hydrateContentRow(row)]))
+  for (const row of updatedRows) {
+    const updated = hydrateContentRow(row)
+    await appendContentRevision({
+      content: updated,
+      action: 'course_rename',
+      actor: normalizedActor,
+      reason: 'course renamed and document metadata updated',
+      meta: {
+        source: 'renameCourseSection',
+        sectionKey: key,
+        previousLabel,
+        nextLabel: label,
+        previousNavPath: previousById.get(Number(updated.id))?.navPath || []
+      }
+    })
+  }
+
+  await appendCourseSectionRevision({
+    sectionKey: key,
+    label,
+    action: 'rename',
+    actor: normalizedActor,
+    reason: 'course renamed by admin',
+    meta: {
+      source: 'renameCourseSection',
+      previousLabel,
+      nextLabel: label
+    },
+    snapshot: {
+      section_key: key,
+      label
+    }
+  })
+
   return { key, label }
 }
 
@@ -1996,6 +2337,16 @@ export async function hideCourseSection(sectionKey, actor) {
     throw new Error('Course does not exist.')
   }
 
+  const beforeRows = await dbAll(
+    `SELECT *
+     FROM content_items
+     WHERE type = 'doc' AND section = ?`,
+    [key]
+  )
+  const previousStatusById = new Map(
+    beforeRows.map((row) => [Number(row.id), String(row.status || 'draft')])
+  )
+
   const result = await dbRun(
     `UPDATE content_items
      SET status = 'draft',
@@ -2004,6 +2355,43 @@ export async function hideCourseSection(sectionKey, actor) {
      WHERE type = 'doc' AND section = ?`,
     [nowIso(), key]
   )
+
+  const updatedRows = await dbAll(
+    `SELECT *
+     FROM content_items
+     WHERE type = 'doc' AND section = ?`,
+    [key]
+  )
+  for (const row of updatedRows) {
+    const updated = hydrateContentRow(row)
+    await appendContentRevision({
+      content: updated,
+      action: 'course_hide',
+      actor: normalizedActor,
+      reason: 'course hidden and docs switched to draft',
+      meta: {
+        source: 'hideCourseSection',
+        sectionKey: key,
+        previousStatus: previousStatusById.get(Number(updated.id)) || null
+      }
+    })
+  }
+
+  await appendCourseSectionRevision({
+    sectionKey: key,
+    label: String(current.label || ''),
+    action: 'hide',
+    actor: normalizedActor,
+    reason: 'course hidden by admin',
+    meta: {
+      source: 'hideCourseSection',
+      updatedDocs: Number(result.rowCount || 0)
+    },
+    snapshot: {
+      section_key: key,
+      label: String(current.label || '')
+    }
+  })
 
   return {
     key,
@@ -2033,6 +2421,16 @@ export async function showCourseSection(sectionKey, actor) {
     throw new Error('Course does not exist.')
   }
 
+  const beforeRows = await dbAll(
+    `SELECT *
+     FROM content_items
+     WHERE type = 'doc' AND section = ?`,
+    [key]
+  )
+  const previousStatusById = new Map(
+    beforeRows.map((row) => [Number(row.id), String(row.status || 'draft')])
+  )
+
   const now = nowIso()
   const result = await dbRun(
     `UPDATE content_items
@@ -2043,9 +2441,161 @@ export async function showCourseSection(sectionKey, actor) {
     [now, now, key]
   )
 
+  const updatedRows = await dbAll(
+    `SELECT *
+     FROM content_items
+     WHERE type = 'doc' AND section = ?`,
+    [key]
+  )
+  for (const row of updatedRows) {
+    const updated = hydrateContentRow(row)
+    await appendContentRevision({
+      content: updated,
+      action: 'course_show',
+      actor: normalizedActor,
+      reason: 'course shown and docs switched to published',
+      meta: {
+        source: 'showCourseSection',
+        sectionKey: key,
+        previousStatus: previousStatusById.get(Number(updated.id)) || null
+      }
+    })
+  }
+
+  await appendCourseSectionRevision({
+    sectionKey: key,
+    label: String(current.label || ''),
+    action: 'show',
+    actor: normalizedActor,
+    reason: 'course shown by admin',
+    meta: {
+      source: 'showCourseSection',
+      updatedDocs: Number(result.rowCount || 0)
+    },
+    snapshot: {
+      section_key: key,
+      label: String(current.label || '')
+    }
+  })
+
   return {
     key,
     label: String(current.label || ''),
     updatedDocs: Number(result.rowCount || 0)
+  }
+}
+
+export async function listContentRevisions({ contentId = null, slug = '', limit = 100 } = {}) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100))
+  const filters = []
+  const params = []
+  const normalizedContentId = Number(contentId)
+  const normalizedSlug = String(slug || '').trim()
+
+  if (Number.isInteger(normalizedContentId) && normalizedContentId > 0) {
+    filters.push('content_id = ?')
+    params.push(normalizedContentId)
+  }
+
+  if (normalizedSlug) {
+    filters.push('content_slug = ?')
+    params.push(normalizedSlug)
+  }
+
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : ''
+  const rows = await dbAll(
+    `SELECT id, content_id, content_slug, content_type, action, snapshot, actor_user_id, actor_role, reason, meta, created_at
+     FROM content_item_revisions
+     ${where}
+     ORDER BY id DESC
+     LIMIT ?`,
+    [...params, safeLimit]
+  )
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    content_id:
+      row.content_id === null || row.content_id === undefined ? null : Number(row.content_id),
+    content_slug: String(row.content_slug || ''),
+    content_type: String(row.content_type || ''),
+    action: String(row.action || ''),
+    snapshot: parseRevisionJson(row.snapshot, {}),
+    actor_user_id:
+      row.actor_user_id === null || row.actor_user_id === undefined
+        ? null
+        : Number(row.actor_user_id),
+    actor_role: String(row.actor_role || ''),
+    reason: String(row.reason || ''),
+    meta: parseRevisionJson(row.meta, null),
+    created_at: String(row.created_at || '')
+  }))
+}
+
+export async function listCourseSectionRevisions(sectionKey = '', limit = 100) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100))
+  const key = String(sectionKey || '').trim()
+  const rows = key
+    ? await dbAll(
+        `SELECT id, section_key, label, action, snapshot, actor_user_id, actor_role, reason, meta, created_at
+         FROM course_section_revisions
+         WHERE section_key = ?
+         ORDER BY id DESC
+         LIMIT ?`,
+        [key, safeLimit]
+      )
+    : await dbAll(
+        `SELECT id, section_key, label, action, snapshot, actor_user_id, actor_role, reason, meta, created_at
+         FROM course_section_revisions
+         ORDER BY id DESC
+         LIMIT ?`,
+        [safeLimit]
+      )
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    section_key: String(row.section_key || ''),
+    label: String(row.label || ''),
+    action: String(row.action || ''),
+    snapshot: parseRevisionJson(row.snapshot, {}),
+    actor_user_id:
+      row.actor_user_id === null || row.actor_user_id === undefined
+        ? null
+        : Number(row.actor_user_id),
+    actor_role: String(row.actor_role || ''),
+    reason: String(row.reason || ''),
+    meta: parseRevisionJson(row.meta, null),
+    created_at: String(row.created_at || '')
+  }))
+}
+
+export async function getContentRevisionById(revisionId) {
+  const safeId = Number(revisionId)
+  if (!Number.isInteger(safeId) || safeId <= 0) return null
+
+  const row = await dbGet(
+    `SELECT id, content_id, content_slug, content_type, action, snapshot, actor_user_id, actor_role, reason, meta, created_at
+     FROM content_item_revisions
+     WHERE id = ?
+     LIMIT 1`,
+    [safeId]
+  )
+  if (!row?.id) return null
+
+  return {
+    id: Number(row.id),
+    content_id:
+      row.content_id === null || row.content_id === undefined ? null : Number(row.content_id),
+    content_slug: String(row.content_slug || ''),
+    content_type: String(row.content_type || ''),
+    action: String(row.action || ''),
+    snapshot: parseRevisionJson(row.snapshot, {}),
+    actor_user_id:
+      row.actor_user_id === null || row.actor_user_id === undefined
+        ? null
+        : Number(row.actor_user_id),
+    actor_role: String(row.actor_role || ''),
+    reason: String(row.reason || ''),
+    meta: parseRevisionJson(row.meta, null),
+    created_at: String(row.created_at || '')
   }
 }
